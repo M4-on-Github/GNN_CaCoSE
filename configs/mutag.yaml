@@ -1,0 +1,27 @@
+extends: base.yaml
+
+task: gc
+
+data:
+  dataset: mutag
+  provider: tudataset
+  split: stratified_ratio
+  split_args:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+
+model:
+  num_heads: 1        # FROZEN: 1 for graph classification
+  # The paper never states a dropout rate (spec ambiguity #11), so this is our choice.
+  # Measured on MUTAG, 20 epochs, seed 0: dropout 0.5 gives train loss 0.47 but eval loss 1.03
+  # and a collapse to a single predicted class; dropout 0.0 gives eval loss 0.45 and 78.7%
+  # train accuracy with a sane prediction distribution. The cause is that dropout perturbs the
+  # features SAGPool selects nodes from, so the train-time and eval-time node selections differ
+  # -- which bites hardest on MUTAG's ~18-node graphs. Cora, being far larger, is unaffected
+  # and keeps the 0.5 default.
+  dropout: 0.0
+
+train:
+  epochs: 100         # FROZEN for gc
+  patience: 25        # FROZEN for gc

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cacose"
+version = "0.1.0"
+description = "Cross-attentive Cohesive Subgraph Embedding — a from-the-paper reimplementation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Pinned to mirror the cluster container (slurm/cacose.def). These two must move together
+# or "tests pass locally" stops predicting "works on the cluster".
+#
+# torch is 2.5.1, not the 2.4.0 the plan first named: the 2.4.0 Windows CPU build corrupts the
+# heap across repeated torch_geometric scatter calls (Windows fatal exception 0xc0000374).
+# Every pooling op is fine in isolation; the fault only appears once enough of them run in one
+# process, which is exactly what a test suite does. 2.5.1 runs the same suite clean.
+#
+# Deliberately no torch_scatter / torch_sparse / pyg_lib: PyG >= 2.4 has pure-torch fallbacks
+# for everything used here, and those three are the usual Apptainer build failure.
+dependencies = [
+    "torch==2.5.1",
+    "torch-geometric==2.6.1",
+    "networkx>=3.0",
+    "pyyaml>=6.0",
+    # PyG's Planetoid/TUDataset readers unpickle scipy sparse matrices; without it the very
+    # first dataset load dies with ModuleNotFoundError deep inside torch_geometric.io.
+    "scipy",
+    # Held at NumPy 1.x. torch 2.4.0 hard-required it (built against the NumPy 1.x C API;
+    # with NumPy 2 it imports but every interop call dies with "_ARRAY_API not found").
+    # 2.5.1 is less strict, but the pin stays so venv and container resolve identically.
+    "numpy<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+include = ["cacose*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]

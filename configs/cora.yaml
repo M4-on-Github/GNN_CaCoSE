@@ -1,0 +1,12 @@
+extends: base.yaml
+
+# Paper section 4.1 gives 1208/500/500. Those sum to 2208 of Cora's 2708 nodes, leaving 500
+# unused -- see spec ambiguity #6b. Implemented literally, as the text states.
+data:
+  dataset: cora
+  provider: planetoid
+  split: fixed_count
+  split_args:
+    train: 1208
+    val: 500
+    test: 500

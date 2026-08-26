@@ -172,7 +172,7 @@ later phases of the project bind to them directly.
 \begin{verbatim}
 Subgraph(k: int, edge_index: Tensor, node_map: Tensor)
 Decomposition(subgraphs: list[Subgraph], num_nodes: int, kmax: int)
-    cache key: (dataset, delta, caef_mode)
+    cache key: (dataset, decomposer_id, param_hash)
 
 forward(...) -> (logits, aux)
     aux = {Z_S, Z_S_attn, attn_weights, subgraph_ids}
@@ -185,6 +185,12 @@ without reference to the graph it came from; \texttt{edge\_index} is in local in
 \texttt{Decomposition} is the entry point for applying the method to a new domain. In \texttt{aux},
 \texttt{attn\_weights} is retained per head rather than averaged, which is what an attention
 visualiser needs. Both structures are covered by tests asserting their fields and shapes.
+
+The cache key generalises what an earlier draft fixed as $(\textrm{dataset}, \delta,
+\textrm{caef\_mode})$. That form names parameters belonging to one decomposer; since the paper's
+own Figure~5 compares against Louvain and Metis partitions, the key must identify the decomposer
+too. For \texttt{KCoreCaEF} the parameter hash covers exactly $\delta$ and the \caef{} mode, so the
+two forms agree.
 
 \section{Assumptions and ambiguity resolutions}
 \label{sec:ambiguity}
@@ -209,11 +215,13 @@ working assumption. Open items are candidates for correspondence with the first 
 8 & Meaning of ``1-hot encoding'' features & Native dataset features & MUTAG already carries one-hot atom types; the remark most plausibly targets featureless GC datasets & Open \\
 9 & GCN depth per subgraph & Two layers & Unstated; two is the default in the cited GCN work & Open \\
 10 & Is $d_S$ equal to the GCN hidden width? & Both 128 & Paper gives one hidden dimension, 128 & Open \\
+11 & Dropout rate --- never stated & 0.5 for NC, 0 for GC & Measured: at 0.5 the MUTAG eval loss diverges from training loss ($0.47 \rightarrow 1.03$) and predictions collapse to one class, because dropout perturbs the features SAGPool selects nodes from & Open \\
 \bottomrule
 \end{tabular}
 
 \vspace{0.4em}
-{\small Ambiguity log. Items 2 and 7 are settled; the rest are working assumptions.}
+{\small Ambiguity log. Items 2 and 7 are settled; the rest are working assumptions.
+ Item 11 is not in the paper at all --- it is a hyperparameter the text never mentions.}
 \end{center}
 
 \section{Worked example}

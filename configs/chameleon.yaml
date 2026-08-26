@@ -1,0 +1,15 @@
+extends: base.yaml
+
+# Heterophilic; the paper claims its largest margin here. 48/32/20 per the paper's text, drawn
+# fresh per seed. The Geom-GCN masks that ship with the dataset are 60/20/20 -- to compare
+# against those instead, set split: provided_masks (spec ambiguity #7).
+#
+# Expect kmax around 63, so ~63 branches: this is the dataset where share_weights matters.
+data:
+  dataset: chameleon
+  provider: wikipedia
+  split: stratified_ratio
+  split_args:
+    train: 0.48
+    val: 0.32
+    test: 0.20

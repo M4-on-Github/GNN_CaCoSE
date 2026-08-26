@@ -1,0 +1,67 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
+
+# CaCoSE runtime container.
+#
+# Dependencies only -- the code is NOT baked in. The repo is bind-mounted from
+# /home/$USER/CaCoSE at run time, so editing code never requires a rebuild. Rebuild this
+# image only when pyproject.toml's dependencies change.
+#
+# The versions below must match pyproject.toml exactly. That is what makes "tests pass
+# locally" mean anything about a cluster run.
+#
+#   torch 2.5.1  - not 2.4.0. The 2.4.0 build corrupts the heap across repeated
+#                  torch_geometric scatter calls; 2.5.1 does not.
+#   numpy < 2    - torch wheels are built against the NumPy 1.x C API. With NumPy 2 the
+#                  import succeeds and every interop call then fails at runtime.
+#   scipy        - PyG's Planetoid and TUDataset readers unpickle scipy sparse matrices.
+#
+# Deliberately absent: torch_scatter, torch_sparse, pyg_lib. PyG >= 2.4 has pure-torch
+# fallbacks for everything CaCoSE uses, and those three compiled packages are the usual
+# cause of a failed build.
+#
+# cu121 covers every GPU in the pleiades cluster: GTX 1080Ti (sm_61), Quadro RTX 6000
+# (sm_75) and RTX 6000 Ada (sm_89).
+
+%post
+    pip install --no-cache-dir \
+        "numpy<2" \
+        "scipy" \
+        "torch-geometric==2.6.1" \
+        "networkx>=3.0" \
+        "pyyaml>=6.0" \
+        "pytest>=8.0" \
+        "ruff>=0.6"
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+
+%test
+    # Runs at the end of `apptainer build`. Fails the build rather than failing a job later.
+    python - <<'EOF'
+    import numpy, scipy, torch, torch_geometric
+    from torch_geometric.nn import GCNConv, SAGPooling, global_mean_pool  # noqa: F401
+    assert numpy.__version__.startswith("1."), f"numpy must be 1.x, got {numpy.__version__}"
+    # the interop path that silently breaks under NumPy 2
+    assert torch.arange(3.0).numpy().sum() == 3.0
+    print("torch", torch.__version__, "| pyg", torch_geometric.__version__,
+          "| numpy", numpy.__version__, "| scipy", scipy.__version__)
+    print("cuda available:", torch.cuda.is_available())
+    EOF
+
+%labels
+    Name cacose
+    Description CaCoSE reproduction runtime (dependencies only)
+
+%help
+    Dependencies for the CaCoSE package. The code lives on the host.
+
+    Build (on a compute node, not head1):
+        srun -p pleiades --gpus=1 --time=1:00:00 --pty bash
+        apptainer build /data/$USER/CaCoSE/containers/cacose.sif slurm/cacose.def
+
+    Run:
+        apptainer exec --nv --bind /data/$USER/CaCoSE \
+            /data/$USER/CaCoSE/containers/cacose.sif \
+            python -m scripts.run --config configs/cora.yaml --seed 0

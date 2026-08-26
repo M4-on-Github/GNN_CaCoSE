@@ -1,0 +1,72 @@
+name: CI
+
+# CPU-only, offline. The unit suite deliberately downloads no datasets, so this runs in about a
+# minute and never touches the network beyond installing dependencies.
+#
+# The main thing this buys us that local testing cannot: a *fresh* dependency resolve on Linux.
+# The development venv is built incrementally, so it can work while pyproject.toml alone would
+# resolve to something broken. Both dependency failures this project hit -- NumPy 2 breaking
+# torch's C API interop, and torch 2.4.0 corrupting the heap in PyG's scatter -- were resolution
+# problems, not code problems. A green run here is a standing proxy for "the Apptainer build in
+# slurm/cacose.def will succeed", which is the one step that cannot be debugged from here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install from a clean environment
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Show resolved versions
+        run: |
+          python - <<'PY'
+          import numpy, scipy, torch, torch_geometric
+          print("torch  ", torch.__version__)
+          print("pyg    ", torch_geometric.__version__)
+          print("numpy  ", numpy.__version__)
+          print("scipy  ", scipy.__version__)
+          PY
+
+      - name: Guard the pins that the container depends on
+        run: |
+          python - <<'PY'
+          import sys, numpy, torch, torch_geometric
+          problems = []
+          # torch wheels are built against the NumPy 1.x C API; with NumPy 2 the import
+          # succeeds and every interop call then fails at runtime.
+          if not numpy.__version__.startswith("1."):
+              problems.append(f"numpy must be 1.x, got {numpy.__version__}")
+          if torch.__version__.split("+")[0] != "2.5.1":
+              problems.append(f"torch must be 2.5.1, got {torch.__version__}")
+          if torch_geometric.__version__ != "2.6.1":
+              problems.append(f"pyg must be 2.6.1, got {torch_geometric.__version__}")
+          # the interop path that silently breaks under NumPy 2
+          if torch.arange(3.0).numpy().sum() != 3.0:
+              problems.append("torch <-> numpy interop is broken")
+          for p in problems:
+              print("FAIL:", p)
+          sys.exit(1 if problems else 0)
+          PY
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: pytest

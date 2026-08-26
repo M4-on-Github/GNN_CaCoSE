@@ -1,0 +1,169 @@
+# RUNBOOK — running CaCoSE on `pleiades`
+
+Copy-pasteable, in order. Steps 0–2 are one-time setup; step 3 onward is per sweep.
+
+**Layout.** Code in `/home/$USER/CaCoSE` (never written to at run time), everything generated in
+`/data/$USER/CaCoSE`. The two are bridged by `$CACOSE_DATA_ROOT` and `$CACOSE_OUT`, which
+`run_seeds.sbatch` sets for you.
+
+```
+/home/mmyatmau/CaCoSE/          git clone — code only
+/data/mmyatmau/CaCoSE/
+  containers/cacose.sif         built once, step 1
+  datasets/                     prefetched, step 2
+  cache/decompositions/         written on first run, reused by every later seed
+  logs/                         cacose_<jobid>_<task>.out / .err
+  results/<dataset>/<confighash>/seed<NN>.json
+```
+
+---
+
+## 0. Clone and create the output tree
+
+On the login node:
+
+```bash
+ssh mmyatmau@head1.condo.cs.cmu.edu
+
+git clone https://github.com/M4-on-Github/GNN_CaCoSE.git /home/$USER/CaCoSE
+mkdir -p /data/$USER/CaCoSE/{containers,datasets,logs,results,cache}
+```
+
+`sbatch` fails immediately if the `--output` directory does not exist, so `logs/` must be created
+before the first submission.
+
+## 1. Build the container — on a compute node, not head1
+
+```bash
+srun -p pleiades --gpus=1 --cpus-per-task=4 --mem=8G --time=1:00:00 --pty bash
+
+cd /home/$USER/CaCoSE
+apptainer build /data/$USER/CaCoSE/containers/cacose.sif slurm/cacose.def
+```
+
+Takes roughly 5–15 minutes, mostly pulling the base image. The definition's `%test` section runs
+at the end and prints the resolved versions:
+
+```
+torch 2.5.1 | pyg 2.6.1 | numpy 1.26.x | scipy 1.x
+cuda available: True
+```
+
+If `numpy must be 1.x` fails the build, that is the guard working — torch's wheels are built
+against the NumPy 1.x C API, and NumPy 2 breaks every interop call at runtime rather than at
+import. Do not relax the pin; it matches `pyproject.toml` deliberately.
+
+Leave the interactive session with `exit` once the build succeeds.
+
+## 2. Prefetch datasets — on the login node, which has network
+
+```bash
+cd /home/$USER/CaCoSE
+export CACOSE_DATA_ROOT=/data/$USER/CaCoSE/datasets
+
+apptainer exec /data/$USER/CaCoSE/containers/cacose.sif \
+    python -m scripts.prefetch_data --all
+```
+
+Expected:
+
+```
+  OK   cora (planetoid)             graphs=    1 features= 1433 classes=7
+  OK   chameleon (wikipedia)        graphs=    1 features= 2325 classes=5
+  OK   mutag (tudataset)            graphs=  188 features=    7 classes=2
+all datasets present (~50 MB under /data/mmyatmau/CaCoSE/datasets)
+```
+
+**This step is not optional.** Compute nodes typically have no outbound network, so a
+first-use download inside an array job fails after the job has already queued and been
+scheduled. `run_seeds.sbatch` refuses to start if `datasets/` is missing.
+
+## 3. Submit a sweep — held
+
+```bash
+cd /home/$USER/CaCoSE
+scripts/submit.sh configs/cora.yaml
+```
+
+This runs `sbatch --hold`, so all 10 array tasks sit in `JobHeldUser` and **nothing starts yet**.
+The script prints the job id and the exact release command.
+
+```bash
+squeue -j <jobid>          # ST=PD, REASON=JobHeldUser
+```
+
+## 4. Release
+
+```bash
+scontrol release <jobid>            # all 10 seeds; the array's %3 cap admits 3 at a time
+scontrol release <jobid>_0          # or just one seed first, to sanity-check
+```
+
+Two independent throttles: `--hold` is your manual gate, `%3` is automatic and still applies
+after a blanket release. At most three tasks of this array ever run at once.
+
+Watch:
+
+```bash
+squeue -u $USER
+tail -f /data/$USER/CaCoSE/logs/cacose_<jobid>_0.out
+```
+
+A healthy task ends with a line like:
+
+```
+done   : test_acc=0.8560 best_val=0.8520 epochs=40 (best 20) kmax=4 subgraphs=4 params=1,032,207 5.13s
+wrote  : /data/mmyatmau/CaCoSE/results/cora/66c03b2a/seed00.json
+```
+
+## 5. Collect
+
+```bash
+apptainer exec /data/$USER/CaCoSE/containers/cacose.sif \
+    env CACOSE_OUT=/data/$USER/CaCoSE python -m scripts.sweep_seeds
+```
+
+```
+| dataset | config | seeds | mean +/- std | paper | delta |
+|---|---|---:|---|---:|---:|
+| cora | 66c03b2a | 10 | 8x.xx +/- x.xx | 85.00 | +x.xx |
+
+gate: cora [66c03b2a] 8x.xx vs accept >= 83.5 -> PASS
+```
+
+Then send back the JSON files, which are small:
+
+```bash
+tar czf cora_results.tgz -C /data/$USER/CaCoSE results/cora
+```
+
+Repeat steps 3–5 for `configs/chameleon.yaml` and `configs/mutag.yaml`.
+
+---
+
+## Notes and failure modes
+
+**Which nodes.** No `--nodelist`. Peak usage is roughly 1–2 GB of VRAM even on Chameleon, so any
+node in the partition works and the queue is shorter. The container's cu121 covers every GPU the
+cluster has: GTX 1080Ti (sm_61), Quadro RTX 6000 (sm_75), RTX 6000 Ada (sm_89).
+
+**Rebuilding after a code change: not needed.** The container holds dependencies only; the repo is
+bind-mounted from `/home`. `git pull` is enough. Rebuild only when `pyproject.toml` dependencies
+change.
+
+**Decomposition cache.** The first seed of a dataset computes the decomposition and writes it to
+`cache/decompositions/`; later seeds load it. It is deterministic and keyed by
+`(dataset, decomposer, params)`, so changing `delta` or `caef_mode` produces a different file
+rather than a stale hit. Safe to delete at any time.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `sbatch: error: Unable to open file` | `logs/` missing | `mkdir -p /data/$USER/CaCoSE/logs` |
+| Job exits with `container not found` | step 1 not done | build the `.sif` |
+| Job exits with `datasets missing` | step 2 not done | run `prefetch_data` on head1 |
+| `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
+| Tasks pending, `REASON=JobHeldUser` | working as intended | `scontrol release <jobid>` |
+| Only 3 tasks running | the `%3` cap | intended; raise it in the `--array` line if you want more |
+
+**Never compute on head1.** It is a login node. Steps 1 and 5 use `srun`/the container; step 2 is
+a download, which is fine there.

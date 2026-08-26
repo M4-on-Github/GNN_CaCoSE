@@ -1,0 +1,38 @@
+# Defaults for every run. Dataset files override only what differs.
+# Values marked FROZEN are fixed by the paper (section 4.1) and are never swept -- if a
+# reproduction target is missed, vary the flags marked with an ambiguity number instead.
+
+task: nc
+
+data:
+  dataset: cora
+  provider: planetoid
+  split: fixed_count
+  split_args: {}
+
+decompose:
+  decomposer: kcore_caef
+  delta: 3            # FROZEN
+  caef_mode: single   # ambiguity #1 -- single | cascade
+
+model:
+  hidden: 128         # FROZEN
+  d_s: 128            # FROZEN (ambiguity #10)
+  gcn_layers: 2       # ambiguity #9
+  backbone: gcn       # gcn | gat | sage  (paper Table 4)
+  pooling: sagpool    # sagpool | topk    (paper Table 4)
+  readout: mean+max   # ambiguity #4 -- mean | max | mean+max | sum
+  share_weights: false  # ambiguity #3
+  pool_ratio: 0.5     # FROZEN
+  num_heads: 2        # FROZEN: 2 for nc, 1 for gc
+  attn_residual: false  # ambiguity #5
+  dropout: 0.5
+
+train:
+  lr: 0.0025          # FROZEN
+  weight_decay: 0.0001  # FROZEN
+  epochs: 250         # FROZEN: 250 nc / 100 gc
+  patience: 50        # FROZEN: 50 nc / 25 gc
+  batch_size: 32
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

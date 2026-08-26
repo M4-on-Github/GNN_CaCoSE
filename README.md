@@ -62,14 +62,25 @@ and what we chose) and §4 (the Figure 2 worked example, which doubles as the pr
 
 ## Quickstart
 
-Not yet available — the package does not exist. Planned:
-
 ```bash
-uv venv --python 3.11 && uv pip install -e ".[dev]"
-pytest                                                    # unit tests, CPU
-python -m scripts.run --config configs/cora.yaml --seed 0
-python -m scripts.sweep_seeds                             # mean ± std table
+uv venv --python 3.11
+uv pip install -e ".[dev]"
+
+pytest                                                        # unit tests, CPU, offline
+python -m scripts.run --config configs/cora.yaml --seed 0     # one run
+python -m scripts.sweep_seeds                                 # mean +/- std vs the paper
 ```
+
+Output location is controlled by two environment variables, so the same commands work locally
+and on the cluster:
+
+| variable | meaning | default |
+|---|---|---|
+| `CACOSE_DATA_ROOT` | where datasets are downloaded to | `./data` |
+| `CACOSE_OUT` | where `results/`, `logs/` and `cache/` are written | `./` |
+
+Results land at `results/<dataset>/<config_hash>/seed<NN>.json`. The config hash covers everything
+except the seed, so a sweep that varies one flag never overwrites the run it is compared against.
 
 GPU training runs on the AART lab `pleiades` cluster via SLURM; see `RUNBOOK.md` once Milestone 5
 lands.

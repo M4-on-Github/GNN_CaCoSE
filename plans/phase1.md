@@ -18,12 +18,12 @@ justification belongs there; a signature, config key, or command belongs here.
 | | Milestone | Acceptance gate |
 |---|---|---|
 | [x] | **0a** Design spec | Compiles clean; assumption table signed off |
-| [ ] | **0b** Scaffold + local venv | `pip install -e .`, `ruff check .`, `pytest` all run |
-| [ ] | **1** Decomposition | `pytest tests/test_decompose.py -q` green |
-| [ ] | **2** Layers | `pytest tests/test_layers.py -q` green |
-| [ ] | **3** Merge + model | `pytest tests/test_merge.py tests/test_model_smoke.py -q` green |
-| [ ] | **4** Data + training | `python -m scripts.run --config configs/cora.yaml --seed 0 --epochs 2` completes |
-| [ ] | **5** Cluster handoff | You can run `RUNBOOK.md` top to bottom unaided |
+| [x] | **0b** Scaffold + local venv | `pip install -e .`, `ruff check .`, `pytest` all run |
+| [x] | **1** Decomposition | `pytest tests/test_decompose.py -q` green |
+| [x] | **2** Layers | `pytest tests/test_layers.py -q` green |
+| [x] | **3** Merge + model | `pytest tests/test_merge.py tests/test_model_smoke.py -q` green |
+| [x] | **4** Data + training | `python -m scripts.run --config configs/cora.yaml --seed 0 --epochs 2` completes |
+| [x] | **5** Cluster handoff | You can run `RUNBOOK.md` top to bottom unaided |
 | [ ] | **6** Reproduction | Three 10-seed means clear the spec's §1 thresholds |
 
 Milestones are strictly ordered. Do not start N+1 until N's gate passes.
@@ -36,13 +36,23 @@ by you; I produce the container definition, the sbatch scripts, and `RUNBOOK.md`
 
 ## Open questions
 
-Spec §3 logs ten ambiguities; eight are Open. Only three affect what gets built, and all three are
-handled by config flags with a paper-faithful default, so **none of them block work**:
+The design spec's ambiguity table (section 3) is the **single source of truth** for what the paper
+leaves underdetermined and what we chose instead. Counts are deliberately not repeated here -- they
+went stale once already. Configs and code cross-reference rows by number ("ambiguity #4"), and
+`tests/test_docs_consistency.py` fails if any reference points at a row that does not exist.
 
-- #1 `caef_mode`, #3 `share_weights`, #4 `readout`, #5 `attn_residual` — flags, defaults set to the
-  most literal reading of the paper.
-- #6a, #6b, #7, #8 — settled by decisions already recorded in the spec table; nothing to decide.
-- #9 (GCN depth) and #10 ($d_S$) — fixed at 2 and 128; revisit only if Milestone 6 misses.
+What that means in practice:
+
+- Every open item is held by a config flag whose default is the most literal reading of the paper,
+  so **none of them block work**. Changing one is a config edit, never a code edit.
+- Two are settled by evidence rather than assumption: support computed inside `G_k` (the paper's
+  own Figure 2 is only consistent that way) and the Chameleon split.
+- One is not an ambiguity in the paper at all -- the paper never states a **dropout** rate. It is
+  logged so the reproduction is not mistaken for following the paper on a point the paper is
+  silent about. Measured: 0.5 collapses MUTAG's eval-time predictions to a single class; 0.0 does
+  not. Cora is unaffected and keeps 0.5.
+
+To send the log to the first author, build the spec PDF -- section 3 is the artefact.
 
 ---
 
@@ -85,7 +95,8 @@ in that order. Everything marked frozen stays put even if a target is missed.
 
 ## Results schema
 
-Each run writes `results/{dataset}_{seed}.json`. `scripts/sweep_seeds.py` and `REPRO_REPORT.md`
+Each run writes `results/<dataset>/<config_hash8>/seed<NN>.json` (nested so a sweep cannot
+overwrite its own baseline). `scripts/sweep_seeds.py` and `REPRO_REPORT.md`
 both consume this, so the field names are load-bearing:
 
 ```json
@@ -106,8 +117,8 @@ both consume this, so the field names are load-bearing:
 Layout: `cacose/`, `configs/`, `scripts/`, `slurm/`, `tests/`, `results/`, `writeups/`.
 
 **The local venv mirrors the cluster container**, so "green locally" means something for your runs:
-`uv venv --python 3.11`, then `torch==2.4.0` (CPU wheel), `torch_geometric==2.6.1`, `networkx`,
-`pyyaml`, `pytest`, `ruff`. Your conda base is Python 3.13 with a torch 2.12 nightly on cu128
+`uv venv --python 3.11`, then `torch==2.5.1` (CPU wheel), `torch_geometric==2.6.1`, `networkx`,
+`pyyaml`, `numpy<2`, `pytest`, `ruff`. Your conda base is Python 3.13 with a torch 2.12 nightly on cu128
 (required for the 5070's sm_120) — a different world from the cluster's cu121, so the project gets
 its own isolated venv rather than borrowing base.
 
@@ -234,9 +245,11 @@ against the spec's §1 targets.
 
 ## Milestone 5 — cluster handoff
 
-`slurm/cacose.def` — from `pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime`; installs
-`torch_geometric==2.6.1 networkx pyyaml pytest ruff` and `pip install -e .`. No `torch_scatter` /
-`torch_sparse` / `pyg_lib` (Milestone 0b). cu121 covers pleiades-0-17's RTX 6000 Ada (sm_89).
+`slurm/cacose.def` — from `pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime`; installs
+`"numpy<2" torch_geometric==2.6.1 networkx pyyaml pytest ruff` and `pip install -e .`. No
+`torch_scatter` / `torch_sparse` / `pyg_lib` (Milestone 0b). The torch version and the numpy pin
+must match `pyproject.toml` exactly, or local test results stop predicting cluster behaviour.
+cu121 covers every GPU in the cluster (sm_61 through sm_89).
 
 `slurm/run_seeds.sbatch` — array 0–9, `--partition=pleiades`, `--nodelist=pleiades-0-17`, 4 CPUs,
 1 GPU, 16 GB, 2 h wall.
@@ -254,8 +267,10 @@ You send back `results/*.json`; I aggregate and write `REPRO_REPORT.md`. If a ta
 propose the next config from the frozen sweep order above and you run it; every configuration tried
 is logged in `results/REPRO_LOG.md`.
 
-**Chameleon is the expected trouble spot** (spec §6 has the analysis). If it misses, try
-`share_weights=true` first.
+**Chameleon is the expected trouble spot** (spec §6 has the analysis). Now measured rather than
+predicted: `kmax=63`, 50 non-empty subgraphs, **17.5M parameters** over 2277 nodes, ~4.2 s/epoch on
+CPU. If it misses, `share_weights=true` is the first variant to try -- it collapses those 50
+branches to one.
 
 `REPRO_REPORT.md` carries the mean ± std table, the winning config, per-dataset `kmax` and subgraph
 counts, wall time, and the ambiguity log for the first author.

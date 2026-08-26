@@ -9,8 +9,11 @@ dist/
 .venv/
 venv/
 
-# Project data and outputs
-data/
-results/
-logs/
+# Project data and outputs.
+# Leading slash anchors these to the repo root -- an unanchored "data/" also matches the
+# cacose/data/ package directory and would silently exclude source files from the commit.
+/_scratch/
+/data/
+/results/
+/logs/
 *.sif

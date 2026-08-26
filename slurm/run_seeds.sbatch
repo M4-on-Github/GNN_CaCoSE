@@ -13,15 +13,14 @@
 
 #SBATCH --job-name=cacose
 #SBATCH --partition=pleiades
-#SBATCH --chdir=/home/mmyatmau/CaCoSE
 #SBATCH --array=0-9%3
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gpus=1
 #SBATCH --mem=16G
 #SBATCH --time=02:00:00
-#SBATCH --output=/data/mmyatmau/CaCoSE/logs/%x_%A_%a.out
-#SBATCH --error=/data/mmyatmau/CaCoSE/logs/%x_%A_%a.err
+#SBATCH --output=/data/%u/CaCoSE/logs/%x_%A_%a.out
+#SBATCH --error=/data/%u/CaCoSE/logs/%x_%A_%a.err
 
 set -euo pipefail
 
@@ -32,9 +31,20 @@ CONFIG=${1:?usage: sbatch --hold slurm/run_seeds.sbatch <config.yaml>}
 source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"
 require_container_runtime
 
-CACOSE_HOME=/home/${USER}/CaCoSE
+# The repo is wherever sbatch was run from -- SLURM starts a job in the submission directory.
+# Deriving it rather than hardcoding /home/<user>/CaCoSE means the clone can live anywhere and
+# be named anything.
+CACOSE_HOME=${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+cd "${CACOSE_HOME}"
+
 CACOSE_ROOT=/data/${USER}/CaCoSE
 SIF=${CACOSE_ROOT}/containers/cacose.sif
+
+if [[ ! -f "${CACOSE_HOME}/pyproject.toml" ]]; then
+    echo "ERROR: ${CACOSE_HOME} does not look like the CaCoSE repo (no pyproject.toml)." >&2
+    echo "       Submit from inside the clone: cd <repo> && sbatch slurm/run_seeds.sbatch ..." >&2
+    exit 1
+fi
 
 # Code from /home, everything written to /data.
 export CACOSE_DATA_ROOT=${CACOSE_ROOT}/datasets

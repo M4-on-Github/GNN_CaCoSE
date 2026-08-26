@@ -29,8 +29,14 @@ git clone https://github.com/M4-on-Github/GNN_CaCoSE.git /home/$USER/CaCoSE
 mkdir -p /data/$USER/CaCoSE/{containers,datasets,logs,results,cache}
 ```
 
-`sbatch` fails immediately if the `--output` directory does not exist, so `logs/` must be created
-before the first submission.
+Two things about this step:
+
+- **`logs/` must exist before the first submission.** `sbatch` fails immediately if the
+  `--output` directory is missing.
+- **The clone path is not load-bearing.** The batch scripts derive the repo from
+  `$SLURM_SUBMIT_DIR`, so the clone can live anywhere and be named anything -- just submit from
+  inside it. `/home/$USER/CaCoSE` is only a convention. Output always goes to
+  `/data/$USER/CaCoSE` regardless, via SLURM's `%u` placeholder.
 
 ## 1. Build the container — submit it as a job
 
@@ -189,6 +195,7 @@ rather than a stale hit. Safe to delete at any time.
 |---|---|---|
 | `sbatch: error: Unable to open file` | `logs/` missing | `mkdir -p /data/$USER/CaCoSE/logs` |
 | `apptainer: command not found` | runtime not on PATH | the scripts auto-detect via `slurm/_runtime.sh`; see step 1 |
+| `couldn't chdir to ...: going to /tmp` | submitted from outside the clone | `cd` into the repo first; the scripts abort with a clear message |
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
 | Job exits with `datasets missing` | step 2 not done | run `prefetch_data` on head1 |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |

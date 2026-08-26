@@ -13,19 +13,29 @@
 
 #SBATCH --job-name=cacose-build
 #SBATCH --partition=pleiades
-#SBATCH --chdir=/home/mmyatmau/CaCoSE
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=01:00:00
-#SBATCH --output=/data/mmyatmau/CaCoSE/logs/%x_%j.out
-#SBATCH --error=/data/mmyatmau/CaCoSE/logs/%x_%j.err
+#SBATCH --output=/data/%u/CaCoSE/logs/%x_%j.out
+#SBATCH --error=/data/%u/CaCoSE/logs/%x_%j.err
 
 set -euo pipefail
 
+# SLURM starts a job in the directory sbatch was run from, so derive the repo rather than
+# hardcoding a path: the clone can live anywhere and be named anything.
+CACOSE_HOME=${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+cd "${CACOSE_HOME}"
+
 CACOSE_ROOT=/data/${USER}/CaCoSE
 SIF=${CACOSE_ROOT}/containers/cacose.sif
-DEF=slurm/cacose.def
+DEF=${CACOSE_HOME}/slurm/cacose.def
+
+if [[ ! -f "${DEF}" ]]; then
+    echo "ERROR: ${DEF} not found -- submit from inside the CaCoSE clone:" >&2
+    echo "       cd <repo> && sbatch slurm/build_container.sbatch" >&2
+    exit 1
+fi
 
 source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"
 require_container_runtime

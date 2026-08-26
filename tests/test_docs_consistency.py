@@ -101,7 +101,32 @@ def test_sbatch_keeps_the_concurrency_cap_and_no_node_pin():
     assert "--nodelist" not in joined, "pinning a node was deliberately dropped"
     assert "--partition=pleiades" in joined
     assert joined.count("=/data/") == 2, "both --output and --error belong under /data"
-    assert "--chdir=/home/" in joined, "code is read from /home"
+
+
+@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
+def test_sbatch_directives_carry_no_hardcoded_username(script):
+    """#SBATCH lines do not expand $USER, so a literal username there breaks for anyone else.
+
+    SLURM's own %u placeholder does expand in output patterns. --chdir has no equivalent, which
+    is why it was dropped entirely -- a job already starts in the submission directory.
+    """
+    directives = [
+        ln
+        for ln in (REPO / "slurm" / script).read_text(encoding="utf-8").splitlines()
+        if ln.startswith("#SBATCH")
+    ]
+    joined = "\n".join(directives)
+    assert "mmyatmau" not in joined, "hardcoded username in a #SBATCH directive"
+    assert "--chdir" not in joined, "--chdir cannot expand $USER; rely on SLURM_SUBMIT_DIR"
+    assert "/data/%u/" in joined, "log paths should use SLURM's %u placeholder"
+
+
+@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
+def test_sbatch_scripts_locate_the_repo_themselves(script):
+    """Both must work from any clone path, and say so clearly when submitted from elsewhere."""
+    text = (REPO / "slurm" / script).read_text(encoding="utf-8")
+    assert "SLURM_SUBMIT_DIR" in text
+    assert "source" in text and "_runtime.sh" in text, "container runtime must be detected"
 
 
 def test_container_and_pyproject_pin_the_same_versions():

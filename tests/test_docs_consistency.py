@@ -129,6 +129,22 @@ def test_sbatch_scripts_locate_the_repo_themselves(script):
     assert "source" in text and "_runtime.sh" in text, "container runtime must be detected"
 
 
+@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
+def test_helpers_are_sourced_from_the_repo_not_the_spool_copy(script):
+    """SLURM copies the batch script to /var/spool/slurmd/job<id>/slurm_script before running it.
+
+    $BASH_SOURCE therefore points at that copy, whose directory contains no sibling files --
+    sourcing _runtime.sh relative to it fails with "No such file or directory". The helper must
+    be resolved through the repo path instead.
+    """
+    text = (REPO / "slurm" / script).read_text(encoding="utf-8")
+    assert 'source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"' not in text, (
+        "sourcing relative to $BASH_SOURCE breaks under SLURM's spool copy"
+    )
+    assert 'source "${RUNTIME_SH}"' in text
+    assert 'RUNTIME_SH=${CACOSE_HOME}/slurm/_runtime.sh' in text
+
+
 def test_container_and_pyproject_pin_the_same_versions():
     """The mirrored venv only means something while these two agree."""
     proj = (REPO / "pyproject.toml").read_text(encoding="utf-8")

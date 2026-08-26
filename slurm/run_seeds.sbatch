@@ -26,14 +26,9 @@ set -euo pipefail
 
 CONFIG=${1:?usage: sbatch --hold slurm/run_seeds.sbatch <config.yaml>}
 
-# Resolve apptainer/singularity exactly as the build job does. Without this, a cluster where the
-# runtime sits behind an environment module would fail every array task with "command not found".
-source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"
-require_container_runtime
-
 # The repo is wherever sbatch was run from -- SLURM starts a job in the submission directory.
 # Deriving it rather than hardcoding /home/<user>/CaCoSE means the clone can live anywhere and
-# be named anything.
+# be named anything. This must come first: everything below is resolved relative to it.
 CACOSE_HOME=${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 cd "${CACOSE_HOME}"
 
@@ -45,6 +40,17 @@ if [[ ! -f "${CACOSE_HOME}/pyproject.toml" ]]; then
     echo "       Submit from inside the clone: cd <repo> && sbatch slurm/run_seeds.sbatch ..." >&2
     exit 1
 fi
+
+# Resolve apptainer/singularity the same way the build job does. Source the helper from the repo,
+# NOT from the script's own path: SLURM copies the batch script to /var/spool/slurmd/job<id>/
+# before running it, so $BASH_SOURCE points at that copy and its siblings do not exist.
+RUNTIME_SH=${CACOSE_HOME}/slurm/_runtime.sh
+if [[ ! -f "${RUNTIME_SH}" ]]; then
+    echo "ERROR: ${RUNTIME_SH} not found -- submit from inside the CaCoSE clone" >&2
+    exit 1
+fi
+source "${RUNTIME_SH}"
+require_container_runtime
 
 # Code from /home, everything written to /data.
 export CACOSE_DATA_ROOT=${CACOSE_ROOT}/datasets

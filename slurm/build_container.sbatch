@@ -37,7 +37,15 @@ if [[ ! -f "${DEF}" ]]; then
     exit 1
 fi
 
-source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"
+# Resolve helpers from the repo, NOT from the script's own path. SLURM copies the batch script
+# to /var/spool/slurmd/job<id>/slurm_script before running it, so $BASH_SOURCE points at that
+# copy and its siblings do not exist.
+RUNTIME_SH=${CACOSE_HOME}/slurm/_runtime.sh
+if [[ ! -f "${RUNTIME_SH}" ]]; then
+    echo "ERROR: ${RUNTIME_SH} not found -- submit from inside the CaCoSE clone" >&2
+    exit 1
+fi
+source "${RUNTIME_SH}"
 require_container_runtime
 
 echo "host   : $(hostname)"

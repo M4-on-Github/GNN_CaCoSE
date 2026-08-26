@@ -27,6 +27,11 @@ set -euo pipefail
 
 CONFIG=${1:?usage: sbatch --hold slurm/run_seeds.sbatch <config.yaml>}
 
+# Resolve apptainer/singularity exactly as the build job does. Without this, a cluster where the
+# runtime sits behind an environment module would fail every array task with "command not found".
+source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"
+require_container_runtime
+
 CACOSE_HOME=/home/${USER}/CaCoSE
 CACOSE_ROOT=/data/${USER}/CaCoSE
 SIF=${CACOSE_ROOT}/containers/cacose.sif
@@ -55,7 +60,7 @@ if [[ ! -d "${CACOSE_DATA_ROOT}" ]]; then
     exit 1
 fi
 
-apptainer exec --nv \
+"${CONTAINER_CMD}" exec --nv \
     --bind "${CACOSE_ROOT}:${CACOSE_ROOT}" \
     --bind "${CACOSE_HOME}:${CACOSE_HOME}" \
     "${SIF}" \

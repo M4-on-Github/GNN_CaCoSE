@@ -32,28 +32,55 @@ mkdir -p /data/$USER/CaCoSE/{containers,datasets,logs,results,cache}
 `sbatch` fails immediately if the `--output` directory does not exist, so `logs/` must be created
 before the first submission.
 
-## 1. Build the container — on a compute node, not head1
+## 1. Build the container — submit it as a job
 
 ```bash
-srun -p pleiades --gpus=1 --cpus-per-task=4 --mem=8G --time=1:00:00 --pty bash
-
 cd /home/$USER/CaCoSE
-apptainer build /data/$USER/CaCoSE/containers/cacose.sif slurm/cacose.def
+mkdir -p /data/$USER/CaCoSE/logs
+sbatch slurm/build_container.sbatch
 ```
 
-Takes roughly 5–15 minutes, mostly pulling the base image. The definition's `%test` section runs
-at the end and prints the resolved versions:
+Batch rather than interactive, so the build survives a dropped SSH connection and leaves a log:
 
+```bash
+squeue -u $USER
+tail -f /data/$USER/CaCoSE/logs/cacose-build_<jobid>.out
 ```
-torch 2.5.1 | pyg 2.6.1 | numpy 1.26.x | scipy 1.x
-cuda available: True
+
+Takes 5-15 minutes, mostly pulling the base image. A successful log ends with the resolved
+versions and `stack OK`.
+
+Notes on what the job does:
+
+- **No GPU requested.** A build unpacks an image and runs pip; it is I/O bound. The definition's
+  `%test` therefore prints `cuda available: False`, which is expected here and not a problem --
+  CUDA is exercised for real by the first training job.
+- **Cache and scratch go to `/data`.** Pulling the CUDA base image writes several GB, and `/home`
+  is the quota'd partition.
+- **An existing `.sif` is moved aside, not overwritten**, so a failed rebuild cannot leave you
+  with nothing.
+- If an unprivileged build fails, the script retries with `--fakeroot` before giving up.
+
+### If it reports `no container runtime found`
+
+`apptainer` is not always on the PATH, and on some clusters it is still called `singularity` or
+lives behind an environment module. Both `build_container.sbatch` and `run_seeds.sbatch` source
+`slurm/_runtime.sh`, which checks the PATH, then `module load`, then the usual install
+locations. If it still finds nothing, diagnose with:
+
+```bash
+command -v apptainer singularity
+module avail 2>&1 | grep -iE 'apptainer|singularity'
+ls -1 /usr/local/bin /opt 2>/dev/null | grep -iE 'apptainer|singularity'
 ```
 
-If `numpy must be 1.x` fails the build, that is the guard working — torch's wheels are built
-against the NumPy 1.x C API, and NumPy 2 breaks every interop call at runtime rather than at
-import. Do not relax the pin; it matches `pyproject.toml` deliberately.
+If the runtime exists only on the login node, build there instead -- a build is I/O bound, so it
+is far less objectionable on `head1` than training would be:
 
-Leave the interactive session with `exit` once the build succeeds.
+```bash
+cd /home/$USER/CaCoSE
+bash slurm/build_container.sbatch      # the #SBATCH lines are inert when run directly
+```
 
 ## 2. Prefetch datasets — on the login node, which has network
 
@@ -61,7 +88,8 @@ Leave the interactive session with `exit` once the build succeeds.
 cd /home/$USER/CaCoSE
 export CACOSE_DATA_ROOT=/data/$USER/CaCoSE/datasets
 
-apptainer exec /data/$USER/CaCoSE/containers/cacose.sif \
+source slurm/_runtime.sh && require_container_runtime
+"$CONTAINER_CMD" exec /data/$USER/CaCoSE/containers/cacose.sif \
     python -m scripts.prefetch_data --all
 ```
 
@@ -119,7 +147,8 @@ wrote  : /data/mmyatmau/CaCoSE/results/cora/66c03b2a/seed00.json
 ## 5. Collect
 
 ```bash
-apptainer exec /data/$USER/CaCoSE/containers/cacose.sif \
+source slurm/_runtime.sh && require_container_runtime
+"$CONTAINER_CMD" exec /data/$USER/CaCoSE/containers/cacose.sif \
     env CACOSE_OUT=/data/$USER/CaCoSE python -m scripts.sweep_seeds
 ```
 
@@ -159,11 +188,13 @@ rather than a stale hit. Safe to delete at any time.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `sbatch: error: Unable to open file` | `logs/` missing | `mkdir -p /data/$USER/CaCoSE/logs` |
+| `apptainer: command not found` | runtime not on PATH | the scripts auto-detect via `slurm/_runtime.sh`; see step 1 |
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
 | Job exits with `datasets missing` | step 2 not done | run `prefetch_data` on head1 |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
 | Tasks pending, `REASON=JobHeldUser` | working as intended | `scontrol release <jobid>` |
 | Only 3 tasks running | the `%3` cap | intended; raise it in the `--array` line if you want more |
 
-**Never compute on head1.** It is a login node. Steps 1 and 5 use `srun`/the container; step 2 is
-a download, which is fine there.
+**Never train on head1.** It is a login node. Step 1 is a batch job and step 5 is a few seconds of
+aggregation; step 2 is a download, which is fine there. Only fall back to building on head1 if the
+container runtime turns out to exist nowhere else.

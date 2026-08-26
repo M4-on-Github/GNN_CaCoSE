@@ -1,0 +1,21 @@
+# Force LF in the repository for everything text.
+#
+# This is not cosmetic: the shell scripts and the SLURM batch file run on Linux. A CRLF
+# shebang there fails with "/bin/bash^M: bad interpreter", which is a confusing error to hit
+# on a cluster. Committing from Windows with core.autocrlf=true is not sufficient on its own,
+# so the endings are pinned here.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.sbatch  text eol=lf
+*.def     text eol=lf
+*.py      text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.md      text eol=lf
+*.tex     text eol=lf
+*.toml    text eol=lf
+
+*.pdf binary
+*.sif binary
+*.pt  binary

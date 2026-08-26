@@ -145,6 +145,24 @@ def test_helpers_are_sourced_from_the_repo_not_the_spool_copy(script):
     assert 'RUNTIME_SH=${CACOSE_HOME}/slurm/_runtime.sh' in text
 
 
+def test_container_test_section_avoids_an_indented_heredoc():
+    """The %test body is indented for readability, and a heredoc passes that indentation
+    straight to the interpreter -- Python then rejects the script with IndentationError and the
+    whole build fails at the last step. `python -c` with source at column 0 avoids it."""
+    text = (REPO / "slurm" / "cacose.def").read_text(encoding="utf-8")
+    section = text[text.index("%test") : text.index("%labels")]
+    assert "<<" not in section, "no heredoc in %test; use python -c with column-0 source"
+
+    marker = 'python -c "'
+    assert marker in section
+    code = section[section.index(marker) + len(marker) :]
+    code = code[: code.index('\n"')]  # up to the closing quote on its own line
+
+    indented = [ln for ln in code.splitlines() if ln.startswith((" ", "\t"))]
+    assert not indented, f"python source inside %test must start at column 0: {indented[:2]}"
+    compile(code, "cacose.def:%test", "exec")  # must at least parse
+
+
 def test_container_and_pyproject_pin_the_same_versions():
     """The mirrored venv only means something while these two agree."""
     proj = (REPO / "pyproject.toml").read_text(encoding="utf-8")

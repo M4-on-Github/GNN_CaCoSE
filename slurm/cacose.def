@@ -39,16 +39,19 @@ From: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
 %test
     # Runs at the end of `apptainer build`. Fails the build rather than failing a job later.
-    python - <<'EOF'
-    import numpy, scipy, torch, torch_geometric
-    from torch_geometric.nn import GCNConv, SAGPooling, global_mean_pool  # noqa: F401
-    assert numpy.__version__.startswith("1."), f"numpy must be 1.x, got {numpy.__version__}"
-    # the interop path that silently breaks under NumPy 2
-    assert torch.arange(3.0).numpy().sum() == 3.0
-    print("torch", torch.__version__, "| pyg", torch_geometric.__version__,
-          "| numpy", numpy.__version__, "| scipy", scipy.__version__)
-    print("cuda available:", torch.cuda.is_available())
-    EOF
+    #
+    # Written as `python -c` with the source starting at column 0. A heredoc here does not work:
+    # the %test body is indented for readability, and those leading spaces reach the interpreter
+    # verbatim, so Python rejects the whole script with IndentationError.
+    python -c "
+import numpy, scipy, torch, torch_geometric
+from torch_geometric.nn import GCNConv, SAGPooling, global_mean_pool
+assert numpy.__version__.startswith('1.'), 'numpy must be 1.x, got ' + numpy.__version__
+assert torch.arange(3.0).numpy().sum() == 3.0, 'torch<->numpy interop is broken'
+print('torch', torch.__version__, '| pyg', torch_geometric.__version__, '| numpy', numpy.__version__, '| scipy', scipy.__version__)
+print('cuda available:', torch.cuda.is_available())
+print('stack OK')
+"
 
 %labels
     Name cacose

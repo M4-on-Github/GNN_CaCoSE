@@ -56,9 +56,22 @@ echo "target : ${SIF}"
 # writes several GB, and /home is the 500GB quota'd partition.
 export APPTAINER_CACHEDIR=${CACOSE_ROOT}/.cache/apptainer
 export SINGULARITY_CACHEDIR=${APPTAINER_CACHEDIR}
-export APPTAINER_TMPDIR=${CACOSE_ROOT}/.cache/tmp
-export SINGULARITY_TMPDIR=${APPTAINER_TMPDIR}
-mkdir -p "${APPTAINER_CACHEDIR}" "${APPTAINER_TMPDIR}" "${CACOSE_ROOT}/containers"
+mkdir -p "${APPTAINER_CACHEDIR}" "${CACOSE_ROOT}/containers"
+
+# Build scratch goes to node-local /tmp when possible. Apptainer warns that /data is mounted
+# 'nodev', which it flags as a possible source of build failure, and node-local disk is faster
+# for unpacking anyway. Fall back to /data if /tmp is not usable.
+BUILD_TMP=/tmp/${USER}-apptainer-$$
+if mkdir -p "${BUILD_TMP}" 2>/dev/null; then
+    echo "build scratch : ${BUILD_TMP} (node-local)"
+    trap 'rm -rf "${BUILD_TMP}"' EXIT
+else
+    BUILD_TMP=${CACOSE_ROOT}/.cache/tmp
+    mkdir -p "${BUILD_TMP}"
+    echo "build scratch : ${BUILD_TMP} (on /data; expect a 'nodev' warning)"
+fi
+export APPTAINER_TMPDIR=${BUILD_TMP}
+export SINGULARITY_TMPDIR=${BUILD_TMP}
 
 if [[ -f "${SIF}" ]]; then
     echo "note   : ${SIF} already exists; moving it aside rather than overwriting"

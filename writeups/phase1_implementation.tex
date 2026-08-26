@@ -1,0 +1,292 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\hypersetup{colorlinks=true, linkcolor=black, urlcolor=blue, citecolor=black}
+
+\newcommand{\cacose}{\texttt{CaCoSE}}
+\newcommand{\caef}{\textit{CaEF}}
+
+\title{\vspace{-2em}CaCoSE Phase 1: Implementation Specification\\
+\large A from-the-paper reimplementation of cross-attentive cohesive subgraph embedding}
+\author{GNN\_CaCoSE project}
+\date{26 August 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\begin{abstract}
+\noindent This document fixes the Phase~1 design of a reimplementation of \cacose{} (Hossain,
+Islam, Chebbah, Fanning and Akbas, \textit{Cross-attentive Cohesive Subgraph Embedding to Mitigate
+Oversquashing in GNNs}, arXiv:2603.27529v3) before any code is written. No reference implementation
+of the method is publicly available, so every construction here is derived from the paper text,
+its Figure~2 worked example, and Algorithm~1 in its appendix. Where the paper underdetermines an
+implementation choice, this document records what the paper says, what we implement, and whether
+the reading is settled or still open. Phase~1 succeeds when the package reproduces the paper's reported
+accuracy on Cora, Chameleon and MUTAG to within a stated tolerance.
+\end{abstract}
+
+\section{Scope}
+
+Phase~1 delivers a tested Python package, \texttt{cacose}, built on PyTorch Geometric, and a
+reproduction of three of the paper's twelve reported results. The three datasets span the regimes
+the method claims to serve: Cora (homophilic node classification), Chameleon (heterophilic node
+classification, where the paper claims its largest margin) and MUTAG (graph classification).
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{llrr}
+\toprule
+Dataset & Task & Paper accuracy & Phase 1 accepts at \\
+\midrule
+Cora      & Node classification  & 85.00 & $\geq$ 83.5 \\
+Chameleon & Node classification  & 68.99 & $\geq$ 66.5 \\
+MUTAG     & Graph classification & 76.99 & $\geq$ 74.0 \\
+\bottomrule
+\end{tabular}
+\caption{Reproduction targets, mean over 10 seeds (paper Tables 1 and 2).}
+\end{table}
+
+Out of scope for Phase~1: application of the method to a new domain (Phase~2) and an interactive
+attention visualiser (Phase~3). Both later phases consume this package rather than modify it, which
+constrains two interfaces described in Section~\ref{sec:hooks}.
+
+\section{Method}
+
+A graph is $G = (V, E, X)$ with $|V| = N_v$ nodes and features $X \in \mathbb{R}^{N_v \times d}$.
+The method is a deterministic graph transform followed by a trainable network. Separating the two
+matters for engineering: the transform runs once per dataset on CPU and is cached, and the network
+never modifies it.
+
+\subsection{Module 1: cohesive subgraph decomposition}
+
+Let $\mathrm{core}(v)$ be the node core number, and $G_k$ the node-induced subgraph on
+$\{v : \mathrm{core}(v) \geq k\}$. The paper's edge score (its Definition~2) is
+\begin{equation}
+C(u,v) = \max\{k \mid (u,v) \in G_k\}.
+\end{equation}
+Because $(u,v) \in G_k$ exactly when both endpoints survive to level $k$, this reduces to
+\begin{equation}
+C(u,v) = \min\bigl(\mathrm{core}(u), \mathrm{core}(v)\bigr),
+\label{eq:score}
+\end{equation}
+which we implement directly from a single call to \texttt{networkx.core\_number}. Materialising each
+$G_k$ to compute scores, as a literal reading of the definition suggests, is unnecessary.
+
+Closure-aware edge filtration (\caef{}, the paper's Theorem~1) then demotes edges that carry no
+triadic support. For an edge with score $k \geq \delta$,
+\begin{equation}
+S(u,v) = \bigl|N_k(u) \cap N_k(v)\bigr|, \qquad
+S(u,v) = 0 \;\Longrightarrow\; C(u,v) \leftarrow k - 1,
+\label{eq:caef}
+\end{equation}
+where $N_k(\cdot)$ is the neighbourhood \emph{inside $G_k$}. The restriction to $G_k$ rather than
+$G$ is the single most consequential reading in this document, and Section~\ref{sec:example}
+shows that the paper's own Figure~2 is only consistent under it. Appendix~A.1 of the paper supplies
+the justification for the rule itself: an edge with $N(u) \cap N(v) = \emptyset$ has non-positive
+Ollivier-Ricci curvature, so \caef{} removes exactly the edges that behave as bottlenecks.
+
+Subgraphs are then the score classes,
+\begin{equation}
+S = \{S_k\}_{k=1}^{k_{\max}}, \qquad S_k = (V_k, E_k), \qquad E_k = \{(u,v) \in E \mid C(u,v) = k\}.
+\label{eq:partition}
+\end{equation}
+This partitions the \emph{edge} set. A node may belong to many subgraphs, an edge to exactly one,
+and $S_k \neq G_k$ in general. The number of subgraphs is $k_{\max}$, the graph degeneracy.
+
+\subsection{Module 2: graph learning}
+
+Each subgraph is embedded independently, with its own parameters:
+\begin{equation}
+H_k = \mathrm{GCN}_k(S_k), \qquad Z_k = \mathrm{SAGPool}_k(S_k, H_k).
+\end{equation}
+$H_k \in \mathbb{R}^{|V_k| \times h}$ holds node embeddings local to the subgraph; $Z_k \in
+\mathbb{R}^{d_S}$ is a single pooled vector summarising it. Self-attention graph pooling selects the
+top $\lceil \mathrm{PR} \cdot |V_k| \rceil$ nodes by a GCN-computed attention score before readout,
+which is where the paper's claim of filtering task-irrelevant neighbours is realised.
+
+\subsection{Module 3: cross-subgraph attention and feature combination}
+
+Pooling discards the relationships \emph{between} regions, so the subgraph embeddings are stacked
+into $Z_S \in \mathbb{R}^{N_S \times d_S}$ and passed through scaled dot-product self-attention:
+\begin{equation}
+\mathrm{Attn}_S = \mathrm{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_S}}\right), \qquad
+Z_S^{\mathrm{attn}} = \mathrm{Attn}_S V,
+\label{eq:attn}
+\end{equation}
+with $Q = Z_S W_Q$, $K = Z_S W_K$, $V = Z_S W_V$. Since $N_S = k_{\max}$ is small, this costs little.
+The graph representation is the mean over subgraphs,
+\begin{equation}
+Z_G = \mu\bigl([Z_1^{\mathrm{attn}}, \ldots, Z_{k_{\max}}^{\mathrm{attn}}]\bigr).
+\end{equation}
+Node representations concatenate each node's local embedding with its subgraph's attended embedding
+and sum over every subgraph the node appears in:
+\begin{equation}
+h_v^{(k)} = h_v \,\|\, Z_k^{\mathrm{attn}} \;\;(v \in S_k), \qquad
+z_v = \sum_{k \,:\, v \in S_k} h_v^{(k)}.
+\label{eq:merge}
+\end{equation}
+The final node representation therefore has width $h + d_S$. Nodes isolated by the decomposition
+receive the zero vector; we count and log them rather than letting them pass silently.
+
+\subsection{Module 4: prediction}
+
+A two-layer perceptron maps $z_v$ to node labels or $Z_G$ to graph labels, trained with cross
+entropy.
+
+\subsection{Procedure}
+
+\noindent\hrulefill
+\begin{enumerate}\setlength{\itemsep}{0pt}
+\item Strip self-loops, symmetrise $E$. Compute $\mathrm{core}(v)$ for all $v$.
+\item Score every edge by Equation~\eqref{eq:score}.
+\item For each distinct $k \geq \delta$: build $G_k$ once, and apply Equation~\eqref{eq:caef} to the
+      edges scoring $k$.
+\item Form $\{S_k\}$ by Equation~\eqref{eq:partition}; emit each as a local edge index plus a
+      local-to-global node map. Cache the result.
+\item For each $S_k$: $H_k \leftarrow \mathrm{GCN}_k(S_k)$, $Z_k \leftarrow
+      \mathrm{SAGPool}_k(S_k, H_k)$.
+\item $Z_S^{\mathrm{attn}} \leftarrow \mathrm{Attention}(Z_S)$ by Equation~\eqref{eq:attn}; retain
+      the attention matrix.
+\item $Z_G \leftarrow \mu(Z_S^{\mathrm{attn}})$; accumulate $z_v$ by Equation~\eqref{eq:merge}.
+\item Return $(Z_v, Z_G)$ and the attention matrix.
+\end{enumerate}
+\noindent\hrulefill
+
+\medskip
+Steps 1--4 are deterministic and cached per $(\textrm{dataset}, \delta, \textrm{caef\_mode})$.
+Step 5 is parallel across $k$.
+
+\subsection{Interfaces}
+\label{sec:interfaces}
+
+Two structures are fixed by this specification rather than left to the implementation, because
+later phases of the project bind to them directly.
+
+\begin{small}
+\begin{verbatim}
+Subgraph(k: int, edge_index: Tensor, node_map: Tensor)
+Decomposition(subgraphs: list[Subgraph], num_nodes: int, kmax: int)
+    cache key: (dataset, delta, caef_mode)
+
+forward(...) -> (logits, aux)
+    aux = {Z_S, Z_S_attn, attn_weights, subgraph_ids}
+\end{verbatim}
+\end{small}
+
+\noindent
+\texttt{node\_map} carries local-to-global node indices, so a subgraph's tensors can be interpreted
+without reference to the graph it came from; \texttt{edge\_index} is in local indexing. The cached
+\texttt{Decomposition} is the entry point for applying the method to a new domain. In \texttt{aux},
+\texttt{attn\_weights} is retained per head rather than averaged, which is what an attention
+visualiser needs. Both structures are covered by tests asserting their fields and shapes.
+
+\section{Assumptions and ambiguity resolutions}
+\label{sec:ambiguity}
+
+The table below lists every point where the paper underdetermines the implementation. A status of
+Resolved means the paper's own text or figures settle the question; Open means we proceed on a
+working assumption. Open items are candidates for correspondence with the first author.
+
+\begin{center}\small
+\begin{tabular}{@{}p{0.5cm}p{3.1cm}p{4.3cm}p{4.6cm}p{1.6cm}@{}}
+\toprule
+\# & Question & What we implement & Reason & Status \\
+\midrule
+1 & \caef{} decrement: once, or cascade to $k-2$? & Single decrement, configurable & Algorithm~1 lines 2--3 show one assignment, no loop & Open \\
+2 & Triadic support in $G_k$ or in $G$? & Inside $G_k$ & Only reading consistent with Figure~2; see Section~\ref{sec:example} & \textbf{Resolved} \\
+3 & $\mathrm{GCN}_k$ weights separate or shared? & Separate, flag to share & Subscript $k$ in Equation~(6) & Open \\
+4 & SAGPool readout function & mean $\|$ max, configurable & Standard SAGPool-g practice; paper says only ``READOUT'' & Open \\
+5 & Residual/LayerNorm on attention? & Absent, flag to enable & Equation~(8) is stated plainly, without either & Open \\
+6a & Cora split fixed or per seed? & Re-randomised per seed & Paper reports a mean over 10 seeds & Open \\
+6b & Cora counts 1208/500/500 leave 500 nodes unused & Literal 1208/500/500 & 1208+500+1000 = 2708 exactly, so ``500'' may be a typo for the standard split; we follow the text & Open \\
+7 & Chameleon: which version and split? & Geom-GCN preprocessed graph, our own stratified 48/32/20 per seed & Paper states 48/32/20; the packaged Geom-GCN masks are 60/20/20 & \textbf{Resolved} \\
+8 & Meaning of ``1-hot encoding'' features & Native dataset features & MUTAG already carries one-hot atom types; the remark most plausibly targets featureless GC datasets & Open \\
+9 & GCN depth per subgraph & Two layers & Unstated; two is the default in the cited GCN work & Open \\
+10 & Is $d_S$ equal to the GCN hidden width? & Both 128 & Paper gives one hidden dimension, 128 & Open \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.4em}
+{\small Ambiguity log. Items 2 and 7 are settled; the rest are working assumptions.}
+\end{center}
+
+\section{Worked example}
+\label{sec:example}
+
+The paper's Figure~2 provides a ten-node example that pins down the decomposition exactly. It
+consists of a $K_5$ on $v_1 \ldots v_5$, a triangle $v_4 v_6 v_7$, and a $K_4$ on
+$v_7 \ldots v_{10}$. Core numbers are $\mathrm{core}(v_1 \ldots v_5) = 4$,
+$\mathrm{core}(v_7 \ldots v_{10}) = 3$ and $\mathrm{core}(v_6) = 2$.
+
+\begin{center}\small
+\begin{tabular}{@{}llccl@{}}
+\toprule
+Edges & Count & Raw $C(u,v)$ & $S(u,v)$ at that $k$ & Final $C(u,v)$ \\
+\midrule
+$K_5$ interior                & 10 & 4 & 3 & 4 \\
+$K_4$ interior                &  6 & 3 & 2 & 3 \\
+$(v_4,v_7)$                   &  1 & 3 & \textbf{0} & \textbf{2} \\
+$(v_4,v_6)$, $(v_6,v_7)$      &  2 & 2 & not checked ($k < \delta$) & 2 \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.4em}
+{\small Edge scores on the Figure~2 graph with $\delta = 3$.}
+\end{center}
+
+The decisive row is $(v_4, v_7)$. In the full graph the two endpoints share the neighbour $v_6$, so
+support computed on $G$ would be~1 and the edge would survive at level~3. But $\mathrm{core}(v_6) =
+2$, so $v_6$ is absent from $G_3$, support inside $G_3$ is~0, and the edge is demoted to level~2.
+The paper states that this edge ``has no support'' at $k=3$, which is true only under the
+$G_k$-restricted reading. This settles ambiguity~2.
+
+The resulting partition is $\{S_2, S_3, S_4\}$ with $|E(S_2)| = 3$, $|E(S_3)| = 6$ and
+$|E(S_4)| = 10$, and $v_4$ belongs to $S_2$ and $S_4$ but not $S_3$ --- matching the paper's
+statement that $z_{v_4} = h_{v_4(2)} + h_{v_4(4)}$.
+
+This example is the primary unit-test fixture. Encoding it once, here and in the test suite, keeps
+the specification and the implementation from drifting apart.
+
+\section{Experimental protocol}
+
+Hyperparameters follow the paper's Section~4.1 without modification: Adam at learning rate
+$2.5\times10^{-3}$, weight decay $1\times10^{-4}$, hidden width 128, pooling ratio 0.5, $\delta = 3$,
+two attention heads for node classification and one for graph classification. Node classification
+trains for at most 250 epochs with early stopping after 50 epochs without validation improvement;
+graph classification uses 100 and 25. Every configuration is run over 10 seeds and reported as a
+mean.
+
+Splits follow the paper as written: Cora 1208/500/500, Chameleon 48/32/20 stratified, MUTAG
+80/10/10 stratified, all re-drawn per seed. Learning rate and hidden width are treated as fixed by
+the paper and are never tuned; if a target is missed, only the items left open in the
+ambiguity table of Section~\ref{sec:ambiguity} are varied, in the order 1, 4, 5, 3, then dropout.
+
+\section{Validation and risks}
+\label{sec:hooks}
+
+Correctness rests on the decomposition, which is deterministic and therefore fully testable. Beyond
+the Figure~2 fixture, we assert three properties over random graphs: every input edge lands in
+exactly one $S_k$; the union of the node maps is the set of non-isolated nodes; and for every edge
+whose raw score $k$ is at least $\delta$, zero support at level $k$ holds if and only if its final
+score is $k-1$. The last statement is the correct form of the invariant --- the simpler claim that
+every retained edge at level $\geq \delta$ has positive support is false, because a demoted edge can
+land at a level that is still $\geq \delta$ and is never rechecked under a single decrement.
+
+The two interfaces of Section~\ref{sec:interfaces} are fixed now because later phases bind to them:
+the cached \texttt{Decomposition} is the Phase~2 entry point, and the \texttt{aux} dictionary is what
+the Phase~3 visualiser reads. Changing either after Phase~1 means changing both consumers.
+
+One risk deserves stating in advance. Chameleon has a degeneracy near 63, judging from the $k \in
+\{61, 62, 63\}$ values used in the paper's own pilot study, so the model instantiates roughly 63
+separate GCN and pooling branches. With a 2325-dimensional input and unshared weights that is on the
+order of 19 million parameters in the first layers alone, fitted to 2277 nodes. If Chameleon falls
+short of its target, shared weights (ambiguity~3) is the first variant to try. Cora and MUTAG, with
+degeneracies of 4 and roughly 3, are unaffected.
+
+\end{document}

@@ -1,0 +1,16 @@
+ Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Project data and outputs
+data/
+results/
+logs/
+*.sif

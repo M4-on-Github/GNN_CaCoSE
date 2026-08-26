@@ -32,7 +32,8 @@ Phase 1 reproduction targets (paper Tables 1–2, mean over 10 seeds):
 ## Layout
 
 ```
-phase1.md                          engineering plan — milestones, APIs, config schema
+plans/
+  phase1.md                        engineering plan — milestones, APIs, config schema
 writeups/
   phase1_implementation.tex        design spec — method, equations, ambiguity log
 CaCoSE.pdf                         the source paper
@@ -44,6 +45,9 @@ configs/  scripts/  tests/         configs, entrypoints, test suite    (planned)
 slurm/                             Apptainer definition + sbatch       (planned)
 results/                           one JSON per (dataset, seed)        (gitignored)
 ```
+
+Each phase gets a pair: a spec in `writeups/` (what and why — stable, edited only when a design
+decision changes) and a plan in `plans/` (how and in what order — edited every milestone).
 
 ## Reading the design spec
 

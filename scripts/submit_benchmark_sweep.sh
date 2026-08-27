@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit a held seed sweep, rebuilding the container first if it is stale.
+# Submit one benchmark: 10 seeds of one config, rebuilding the container first if it is stale.
 #
 #   scripts/submit_benchmark_sweep.sh configs/cora.yaml
 #
@@ -67,7 +67,9 @@ else
         --error="$LOG_DIR/cacose-build_%j.err" \
         slurm/build_container.sbatch)
     say "[container] build job $BUILD_JOB submitted; the sweep will wait for it"
-    DEPENDENCY="--dependency=afterok:${BUILD_JOB}"
+    # kill-on-invalid-dep: if the build fails, cancel this sweep instead of leaving it parked in
+    # DependencyNeverSatisfied, where it clogs the queue and blocks anything chained behind it.
+    DEPENDENCY="--dependency=afterok:${BUILD_JOB} --kill-on-invalid-dep=yes"
 fi
 
 # ── the sweep itself ─────────────────────────────────────────────────────────

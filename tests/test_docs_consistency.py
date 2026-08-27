@@ -354,3 +354,23 @@ def test_submit_all_validates_the_job_id_before_chaining():
     """A malformed id must fail with an explanation, not with SLURM's dependency error."""
     text = (REPO / "scripts" / "submit_all_benchmarks.sh").read_text(encoding="utf-8")
     assert "^[0-9]+$" in text, "the chained job id must be validated as numeric"
+
+
+def test_build_verification_retries_and_never_fails_the_job():
+    """A transient exec failure on /data must not cancel every benchmark behind the build.
+
+    The image is on network storage, and exec'ing it immediately after writing can return
+    "input/output error" while the file settles. That once failed the build job, leaving three
+    chained arrays in DependencyNeverSatisfied even though the container was fine.
+    """
+    text = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
+    assert "for attempt in" in text, "verification must retry"
+    assert "VERIFIED" in text and "WARNING" in text, "a failed verify must warn, not exit"
+    verify_block = text[text.index("Verifying the stack") :]
+    assert "exit 1" not in verify_block, "verification must not fail the build job"
+
+
+def test_sweep_is_cancelled_if_its_build_fails():
+    """Without --kill-on-invalid-dep a failed build leaves the sweep parked forever."""
+    text = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
+    assert "--kill-on-invalid-dep=yes" in text

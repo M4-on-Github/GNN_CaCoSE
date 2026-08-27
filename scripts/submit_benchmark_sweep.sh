@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submit a held seed sweep, rebuilding the container first if it is stale.
 #
-#   scripts/submit_sweep.sh configs/cora.yaml
+#   scripts/submit_benchmark_sweep.sh configs/cora.yaml
 #
 # Three things happen here:
 #
@@ -16,10 +16,10 @@
 
 set -euo pipefail
 
-CONFIG=${1:?usage: scripts/submit_sweep.sh <config.yaml> [--parsable] [extra sbatch args...]}
+CONFIG=${1:?usage: scripts/submit_benchmark_sweep.sh <config.yaml> [--parsable] [extra sbatch args...]}
 shift || true
 
-# --parsable prints only the array job id, so submit_all_sweeps.sh can chain on it. Consumed here
+# --parsable prints only the array job id, so submit_all_benchmarks.sh can chain on it. Consumed here
 # rather than forwarded, since sbatch is already given --parsable internally.
 PARSABLE=false
 ARGS=()
@@ -72,7 +72,7 @@ JOBID=$(sbatch --parsable \
     --output="$LOG_DIR/cacose_%A_%a.out" \
     --error="$LOG_DIR/cacose_%A_%a.err" \
     "$@" \
-    slurm/train_sweep.sbatch "$CONFIG")
+    slurm/train_benchmark_array.sbatch "$CONFIG")
 
 if [[ "$PARSABLE" == true ]]; then
     echo "$JOBID"

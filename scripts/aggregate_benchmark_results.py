@@ -1,7 +1,7 @@
 """Aggregate results into a markdown table, diffed against the paper.
 
-    python -m scripts.aggregate_results
-    python -m scripts.aggregate_results --dataset chameleon
+    python -m scripts.aggregate_benchmark_results
+    python -m scripts.aggregate_benchmark_results --dataset chameleon
 """
 
 from __future__ import annotations

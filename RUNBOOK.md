@@ -6,27 +6,33 @@ Copy-pasteable, in order. Steps 0–2 are one-time setup; step 3 onward is per s
 
 ```bash
 cd /home/$USER/CaCoSE && git pull
-scripts/submit_all_sweeps.sh        # all three datasets, one at a time
+scripts/submit_all_benchmarks.sh        # all three datasets, one at a time
 ```
 
 | Script | What it does | How you run it |
 |---|---|---|
 | `slurm/build_container.sbatch` | builds `cacose.sif` from `cacose.def` | `sbatch` (step 1) |
 | `slurm/download_datasets.sbatch` | fetches Cora / Chameleon / MUTAG into `/data` | `sbatch` (step 2) |
-| `slurm/train_sweep.sbatch` | the 10-seed array job for one config | via `submit_sweep.sh` |
-| `scripts/submit_sweep.sh` | rebuilds if stale, then submits one sweep | directly (step 3) |
-| `scripts/submit_all_sweeps.sh` | chains all three sweeps, 3 tasks concurrent overall | directly (step 3) |
-| `scripts/aggregate_results.py` | reads `results/` into a table vs the paper | directly (step 4) |
+| `slurm/train_benchmark_array.sbatch` | the 10-seed array job for one config | via `submit_benchmark_sweep.sh` |
+| `scripts/submit_benchmark_sweep.sh` | rebuilds if stale, then submits one sweep | directly (step 3) |
+| `scripts/submit_all_benchmarks.sh` | chains all three sweeps, 3 tasks concurrent overall | directly (step 3) |
+| `scripts/aggregate_benchmark_results.py` | reads `results/` into a table vs the paper | directly (step 4) |
+| `scripts/run_single_experiment.py` | one (config, seed); what the array calls per task | rarely, for debugging |
+| `scripts/download_datasets.py` | the download itself, wrapped by the job above | rarely, locally |
+
+A **benchmark** here is one dataset's reproduction: 10 seeds of one config, compared against the
+paper's reported number. `submit_benchmark_sweep.sh` runs one; `submit_all_benchmarks.sh` runs
+all three back to back.
 
 **Layout.** Code in `/home/$USER/CaCoSE` (never written to at run time), everything generated in
 `/data/$USER/CaCoSE`. The two are bridged by `$CACOSE_DATA_ROOT` and `$CACOSE_OUT`, which
-`train_sweep.sbatch` sets for you.
+`train_benchmark_array.sbatch` sets for you.
 
 ```
 /home/mmyatmau/CaCoSE/          git clone — code only
 /data/mmyatmau/CaCoSE/
   containers/cacose.sif         built once, step 1
-  datasets/                     prefetched, step 2
+  datasets/                     downloaded once, step 2
   cache/decompositions/         written on first run, reused by every later seed
   logs/                         cacose_<jobid>_<task>.out / .err
   results/<dataset>/<confighash>/seed<NN>.json
@@ -116,7 +122,7 @@ compute nodes. Expect:
 all datasets present (~50 MB)
 ```
 
-The datasets must be in place before any sweep: `train_sweep.sbatch` refuses to start without
+The datasets must be in place before any sweep: `train_benchmark_array.sbatch` refuses to start without
 them, since a mid-job download would fail after the task had already been scheduled.
 
 **If this fails with a network error**, the compute nodes have no outbound access either. Then
@@ -128,25 +134,25 @@ python -m scripts.download_datasets --all --data-root ./data
 scp -r ./data/* mmyatmau@head1.condo.cs.cmu.edu:/data/$USER/CaCoSE/datasets/
 ```
 
-## 3. Run the sweeps — `scripts/submit_all_sweeps.sh`
+## 3. Run the sweeps — `scripts/submit_all_benchmarks.sh`
 
 All three datasets, one at a time:
 
 ```bash
 cd /home/$USER/CaCoSE
-scripts/submit_all_sweeps.sh
+scripts/submit_all_benchmarks.sh
 ```
 
 Each sweep is 10 seeds capped at 3 concurrent. Submitting all three at once would allow 9, since
-each array caps independently, so `submit_all_sweeps.sh` chains them with `--dependency=afterany` --
+each array caps independently, so `submit_all_benchmarks.sh` chains them with `--dependency=afterany` --
 never more than 3 of your tasks run at a time. Cora and MUTAG take about a minute each, Chameleon
 about 13, so Chameleon goes last.
 
 A single dataset, or a subset:
 
 ```bash
-scripts/submit_sweep.sh configs/cora.yaml
-scripts/submit_all_sweeps.sh configs/mutag.yaml configs/chameleon.yaml
+scripts/submit_benchmark_sweep.sh configs/cora.yaml
+scripts/submit_all_benchmarks.sh configs/mutag.yaml configs/chameleon.yaml
 ```
 
 Runs unattended. The array's `%3` (`JobArrayTaskLimit`) caps it at three seeds at a time, and
@@ -172,13 +178,13 @@ wrote  : /data/mmyatmau/CaCoSE/results/cora/4c87d394/seed00.json
 
 Cancel with `scancel <jobid>`.
 
-## 4. Collect — `scripts/aggregate_results.py`
+## 4. Collect — `scripts/aggregate_benchmark_results.py`
 
 Aggregation reads JSON only -- no container, no torch -- so it runs on head1:
 
 ```bash
 cd /home/$USER/CaCoSE
-CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.aggregate_results
+CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.aggregate_benchmark_results
 ```
 
 ```
@@ -193,7 +199,7 @@ If head1's `python3` is too old for the package, run it inside the container on 
 instead:
 
 ```bash
-srun -p pleiades --time=00:05:00 --pty     apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE     --env CACOSE_OUT=/data/$USER/CaCoSE     /data/$USER/CaCoSE/containers/cacose.sif     /opt/conda/bin/python3 -m scripts.aggregate_results
+srun -p pleiades --time=00:05:00 --pty     apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE     --env CACOSE_OUT=/data/$USER/CaCoSE     /data/$USER/CaCoSE/containers/cacose.sif     /opt/conda/bin/python3 -m scripts.aggregate_benchmark_results
 ```
 
 Then send the JSON back -- it is a few kilobytes:

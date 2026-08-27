@@ -84,4 +84,4 @@ print('stack OK')
     Run:
         apptainer exec --nv --bind /data/$USER/CaCoSE \
             /data/$USER/CaCoSE/containers/cacose.sif \
-            python -m scripts.run_experiment --config configs/cora.yaml --seed 0
+            python -m scripts.run_single_experiment --config configs/cora.yaml --seed 0

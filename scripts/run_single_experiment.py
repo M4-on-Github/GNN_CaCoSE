@@ -1,6 +1,6 @@
 """Run one (config, seed).
 
-    python -m scripts.run_experiment --config configs/cora.yaml --seed 0
+    python -m scripts.run_single_experiment --config configs/cora.yaml --seed 0
 
 The SLURM array calls this once per seed, passing $SLURM_ARRAY_TASK_ID.
 """

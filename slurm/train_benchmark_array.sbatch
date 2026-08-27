@@ -2,9 +2,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Run one config across 10 seeds as a SLURM array.
 #
-#   sbatch slurm/train_sweep.sbatch configs/cora.yaml
+#   sbatch slurm/train_benchmark_array.sbatch configs/cora.yaml
 #
-#   (normally submitted via scripts/submit_sweep.sh, which also rebuilds a stale container)
+#   (normally submitted via scripts/submit_benchmark_sweep.sh, which also rebuilds a stale container)
 #
 # %3 (JobArrayTaskLimit) caps concurrency at three tasks: SLURM runs three and starts the next
 # as each finishes, so the sweep never takes more than three GPUs at once.
@@ -27,7 +27,7 @@ set -e
 REPO="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO"
 
-CONFIG=${1:?usage: sbatch slurm/train_sweep.sbatch <config.yaml>}
+CONFIG=${1:?usage: sbatch slurm/train_benchmark_array.sbatch <config.yaml>}
 SEED=${SLURM_ARRAY_TASK_ID:-0}
 
 DATA_DIR="/data/$USER/CaCoSE"
@@ -74,6 +74,6 @@ apptainer exec --containall --nv \
     --bind /tmp:/tmp \
     --bind "$REPO:$REPO" \
     --bind "$DATA_DIR:$DATA_DIR" \
-    "$SIF" $PYTHON -m scripts.run_experiment --config "$CONFIG" --seed "$SEED"
+    "$SIF" $PYTHON -m scripts.run_single_experiment --config "$CONFIG" --seed "$SEED"
 
 echo "[$(date)] seed $SEED finished"

@@ -1,7 +1,7 @@
 """One (config, seed) -> one RunResult.
 
 This is the only place that knows the whole pipeline: load, decompose, split, build, train,
-evaluate, record. `scripts/run_experiment.py` is a thin CLI over it, and the SLURM array calls that script
+evaluate, record. `scripts/run_single_experiment.py` is a thin CLI over it, and the SLURM array calls that script
 once per seed.
 """
 

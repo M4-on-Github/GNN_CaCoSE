@@ -82,7 +82,7 @@ def test_spec_records_the_generalised_cache_key():
     assert "cache key: (dataset, delta, caef_mode)" not in text
 
 
-SCRIPTS = ["run_seeds.sbatch", "build.sh"]
+SCRIPTS = ["train_sweep.sbatch", "build_container.sbatch"]
 
 
 def script_text(name: str) -> str:
@@ -96,14 +96,14 @@ def directives(name: str) -> str:
 
 def test_runbook_and_container_agree_on_paths():
     runbook = (REPO / "RUNBOOK.md").read_text(encoding="utf-8")
-    sbatch = script_text("run_seeds.sbatch")
+    sbatch = script_text("train_sweep.sbatch")
     for fragment in ("/data/", "containers/cacose.sif", "datasets"):
         assert fragment in runbook and fragment in sbatch, f"{fragment} missing from one of them"
 
 
 def test_sweep_keeps_the_concurrency_cap_and_no_node_pin():
     """Two throttles were a deliberate decision; losing either changes cluster impact."""
-    d = directives("run_seeds.sbatch")
+    d = directives("train_sweep.sbatch")
     assert "--array=0-9%3" in d, "the %3 concurrency cap must stay"
     assert "--nodelist" not in d, "pinning a node was deliberately dropped"
     assert "-p pleiades" in d or "--partition=pleiades" in d
@@ -207,16 +207,16 @@ def test_container_post_symlinks_python():
 def test_submit_detects_a_stale_container_and_chains_the_rebuild():
     """A .sif built from an older definition would silently run the wrong dependency versions.
 
-    submit.sh hashes cacose.def, compares it against the hash recorded beside the image, and
+    submit_sweep.sh hashes cacose.def, compares it against the hash recorded beside the image, and
     chains the sweep behind a rebuild with --dependency=afterok when they differ.
     """
-    submit = (REPO / "scripts" / "submit.sh").read_text(encoding="utf-8")
-    build = (REPO / "slurm" / "build.sh").read_text(encoding="utf-8")
+    submit = (REPO / "scripts" / "submit_sweep.sh").read_text(encoding="utf-8")
+    build = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
 
     assert "sha256sum" in submit and "def.sha256" in submit
     assert "--dependency=afterok" in submit
     assert "--hold" not in submit, "sweeps run unattended; %3 is the only throttle"
-    # the build must write the sidecar, or submit.sh would rebuild on every invocation
+    # the build must write the sidecar, or submit_sweep.sh would rebuild on every invocation
     assert "def.sha256" in build and "sha256sum" in build
 
 
@@ -226,7 +226,7 @@ def test_submit_creates_the_log_dir_before_sbatch_opens_it():
     Compares line numbers of real commands: the word "sbatch" also appears in the comments
     explaining this very requirement, so a plain substring search finds prose, not a call.
     """
-    lines = (REPO / "scripts" / "submit.sh").read_text(encoding="utf-8").splitlines()
+    lines = (REPO / "scripts" / "submit_sweep.sh").read_text(encoding="utf-8").splitlines()
     code = [(i, ln) for i, ln in enumerate(lines) if not ln.strip().startswith("#")]
     mkdir_at = next(i for i, ln in code if "mkdir -p" in ln)
     first_sbatch = next(i for i, ln in code if re.search(r"sbatch\s+--", ln))
@@ -236,15 +236,15 @@ def test_submit_creates_the_log_dir_before_sbatch_opens_it():
 @pytest.mark.parametrize(
     "script",
     [
-        "scripts/submit.sh",
-        "scripts/submit_all.sh",
-        "slurm/build.sh",
-        "slurm/prefetch.sh",
-        "slurm/run_seeds.sbatch",
+        "scripts/submit_sweep.sh",
+        "scripts/submit_all_sweeps.sh",
+        "slurm/build_container.sbatch",
+        "slurm/download_datasets.sbatch",
+        "slurm/train_sweep.sbatch",
     ],
 )
 def test_shell_scripts_are_executable_in_git(script):
-    """`scripts/submit.sh ...` fails with Permission denied unless git stores mode 100755.
+    """`scripts/submit_sweep.sh ...` fails with Permission denied unless git stores mode 100755.
 
     chmod on Windows does not reach the index -- git there ignores the filesystem exec bit --
     so this has to be set with `git update-index --chmod=+x` and guarded here.
@@ -290,3 +290,26 @@ def test_report_marks_the_same_items_resolved_as_the_spec():
     for row_id in ("2", "7"):
         line = next(ln for ln in text.splitlines() if ln.startswith(f"| {row_id} |"))
         assert "Resolved" in line, f"ambiguity #{row_id} is Resolved in the spec but not here"
+
+
+def test_every_script_named_in_the_runbook_exists():
+    """A runbook that names a file which was since renamed is worse than no runbook."""
+    runbook = (REPO / "RUNBOOK.md").read_text(encoding="utf-8")
+    named = set(re.findall(r"(?:scripts|slurm)/[a-z_]+\.(?:sh|py|sbatch|def)", runbook))
+    assert named, "the runbook should name the scripts it tells you to run"
+    missing = [n for n in sorted(named) if not (REPO / n).exists()]
+    assert not missing, f"RUNBOOK.md names files that do not exist: {missing}"
+
+
+def test_sbatch_job_names_match_their_filenames():
+    """`squeue` shows the job name, so it should point at the file that produced it."""
+    expected = {
+        "build_container.sbatch": "cacose-build",
+        "download_datasets.sbatch": "cacose-datasets",
+        "train_sweep.sbatch": "cacose",
+    }
+    for filename, job_name in expected.items():
+        text = (REPO / "slurm" / filename).read_text(encoding="utf-8")
+        found = re.search(r"^#SBATCH (?:-J|--job-name=)\s*(\S+)", text, re.M)
+        assert found, f"{filename} sets no job name"
+        assert found.group(1) == job_name, f"{filename}: job name is {found.group(1)!r}"

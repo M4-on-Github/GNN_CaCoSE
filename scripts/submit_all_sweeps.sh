@@ -2,8 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Run all three reproduction sweeps, one dataset at a time.
 #
-#   scripts/submit_all.sh
-#   scripts/submit_all.sh configs/cora.yaml configs/mutag.yaml    # or a subset
+#   scripts/submit_all_sweeps.sh
+#   scripts/submit_all_sweeps.sh configs/cora.yaml configs/mutag.yaml    # or a subset
 #
 # Each sweep is 10 seeds capped at 3 concurrent by the array's %3. Submitting all three at once
 # would allow 9 concurrent, since each array caps independently -- so each dataset is chained
@@ -35,10 +35,10 @@ for cfg in "${CONFIGS[@]}"; do
         exit 1
     fi
     if [ -n "$PREV" ]; then
-        JOB=$(scripts/submit.sh "$cfg" --parsable --dependency="afterany:${PREV}")
+        JOB=$(scripts/submit_sweep.sh "$cfg" --parsable --dependency="afterany:${PREV}")
         echo "queued : $(basename "$cfg" .yaml)  job $JOB   (after $PREV)"
     else
-        JOB=$(scripts/submit.sh "$cfg" --parsable)
+        JOB=$(scripts/submit_sweep.sh "$cfg" --parsable)
         echo "queued : $(basename "$cfg" .yaml)  job $JOB   (starts now)"
     fi
     IDS+=("$JOB")
@@ -54,7 +54,7 @@ All ${#CONFIGS[@]} sweeps queued, running one dataset at a time (3 seeds concurr
 
 When everything finishes:
 
-    CACOSE_OUT=${CACOSE_ROOT} python3 -m scripts.sweep_seeds
+    CACOSE_OUT=${CACOSE_ROOT} python3 -m scripts.aggregate_results
     tar czf cacose_results.tgz -C ${CACOSE_ROOT} results
 
 Cancel everything: scancel ${IDS[*]}

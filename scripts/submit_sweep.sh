@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submit a held seed sweep, rebuilding the container first if it is stale.
 #
-#   scripts/submit.sh configs/cora.yaml
+#   scripts/submit_sweep.sh configs/cora.yaml
 #
 # Three things happen here:
 #
@@ -16,10 +16,10 @@
 
 set -euo pipefail
 
-CONFIG=${1:?usage: scripts/submit.sh <config.yaml> [--parsable] [extra sbatch args...]}
+CONFIG=${1:?usage: scripts/submit_sweep.sh <config.yaml> [--parsable] [extra sbatch args...]}
 shift || true
 
-# --parsable prints only the array job id, so submit_all.sh can chain on it. Consumed here
+# --parsable prints only the array job id, so submit_all_sweeps.sh can chain on it. Consumed here
 # rather than forwarded, since sbatch is already given --parsable internally.
 PARSABLE=false
 ARGS=()
@@ -59,7 +59,7 @@ else
     BUILD_JOB=$(sbatch --parsable \
         --output="$LOG_DIR/cacose-build_%j.out" \
         --error="$LOG_DIR/cacose-build_%j.err" \
-        slurm/build.sh)
+        slurm/build_container.sbatch)
     echo "[container] build job $BUILD_JOB submitted; the sweep will wait for it"
     DEPENDENCY="--dependency=afterok:${BUILD_JOB}"
 fi
@@ -72,7 +72,7 @@ JOBID=$(sbatch --parsable \
     --output="$LOG_DIR/cacose_%A_%a.out" \
     --error="$LOG_DIR/cacose_%A_%a.err" \
     "$@" \
-    slurm/run_seeds.sbatch "$CONFIG")
+    slurm/train_sweep.sbatch "$CONFIG")
 
 if [[ "$PARSABLE" == true ]]; then
     echo "$JOBID"

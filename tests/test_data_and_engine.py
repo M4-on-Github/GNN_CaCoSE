@@ -239,7 +239,7 @@ def test_git_sha_prefers_the_environment_override(monkeypatch):
 def test_results_can_be_aggregated_without_torch(tmp_path):
     """Aggregation must work on a machine holding only the JSON files.
 
-    apptainer is not installed on the login node, so `sweep_seeds` cannot rely on the container,
+    apptainer is not installed on the login node, so `aggregate_results` cannot use the container,
     and a login node has no torch either. The engine package therefore imports Paths eagerly and
     everything torch-dependent lazily.
     """
@@ -269,7 +269,7 @@ def test_results_can_be_aggregated_without_torch(tmp_path):
 
     env = dict(os.environ, PYTHONPATH=f"{blocker}{os.pathsep}{repo}")
     proc = subprocess.run(
-        [sys.executable, "-m", "scripts.sweep_seeds", "--out", str(tmp_path)],
+        [sys.executable, "-m", "scripts.aggregate_results", "--out", str(tmp_path)],
         capture_output=True,
         text=True,
         env=env,

@@ -2,8 +2,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Build cacose.sif from slurm/cacose.def.
 #
-#   sbatch slurm/build.sh        # as a batch job
-#   bash   slurm/build.sh        # or directly
+#   sbatch slurm/build_container.sbatch        # as a batch job
+#   bash   slurm/build_container.sbatch        # or directly
 #
 # Run from inside the repo. Self-contained: needs no other file here.
 # ─────────────────────────────────────────────────────────────────────────────

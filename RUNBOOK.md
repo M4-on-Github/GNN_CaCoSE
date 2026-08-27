@@ -2,9 +2,25 @@
 
 Copy-pasteable, in order. Steps 0–2 are one-time setup; step 3 onward is per sweep.
 
+**The whole thing, once set up:**
+
+```bash
+cd /home/$USER/CaCoSE && git pull
+scripts/submit_all_sweeps.sh        # all three datasets, one at a time
+```
+
+| Script | What it does | How you run it |
+|---|---|---|
+| `slurm/build_container.sbatch` | builds `cacose.sif` from `cacose.def` | `sbatch` (step 1) |
+| `slurm/download_datasets.sbatch` | fetches Cora / Chameleon / MUTAG into `/data` | `sbatch` (step 2) |
+| `slurm/train_sweep.sbatch` | the 10-seed array job for one config | via `submit_sweep.sh` |
+| `scripts/submit_sweep.sh` | rebuilds if stale, then submits one sweep | directly (step 3) |
+| `scripts/submit_all_sweeps.sh` | chains all three sweeps, 3 tasks concurrent overall | directly (step 3) |
+| `scripts/aggregate_results.py` | reads `results/` into a table vs the paper | directly (step 4) |
+
 **Layout.** Code in `/home/$USER/CaCoSE` (never written to at run time), everything generated in
 `/data/$USER/CaCoSE`. The two are bridged by `$CACOSE_DATA_ROOT` and `$CACOSE_OUT`, which
-`run_seeds.sbatch` sets for you.
+`train_sweep.sbatch` sets for you.
 
 ```
 /home/mmyatmau/CaCoSE/          git clone — code only
@@ -39,12 +55,12 @@ Two things about this step:
   inside it. `/home/$USER/CaCoSE` is only a convention. Output always goes to
   `/data/$USER/CaCoSE` regardless, via SLURM's `%u` placeholder.
 
-## 1. Build the container — submit it as a job
+## 1. Build the container — `slurm/build_container.sbatch`
 
 ```bash
 cd /home/$USER/CaCoSE
 mkdir -p /data/$USER/CaCoSE/logs
-sbatch slurm/build.sh
+sbatch slurm/build_container.sbatch
 ```
 
 Batch rather than interactive, so the build survives a dropped SSH connection and leaves a log:
@@ -82,15 +98,15 @@ does not work: the base image exposes it through Docker's `ENV PATH`, which Appt
 during `%post` and `%test` but not at `exec` time, so `apptainer exec <sif> python` fails with
 `"python": executable file not found in $PATH`.
 
-## 2. Prefetch datasets
+## 2. Download the datasets — `slurm/download_datasets.sbatch`
 
 ```bash
 cd /home/$USER/CaCoSE
-sbatch slurm/prefetch.sh
-tail -f /data/$USER/CaCoSE/logs/cacose-prefetch_<jobid>.out
+sbatch slurm/download_datasets.sbatch
+tail -f /data/$USER/CaCoSE/logs/cacose-datasets_<jobid>.out
 ```
 
-Submitted as a job because **apptainer is not installed on head1** -- it exists only on the
+Run as a job because **apptainer is not installed on head1** -- it exists only on the
 compute nodes. Expect:
 
 ```
@@ -100,7 +116,7 @@ compute nodes. Expect:
 all datasets present (~50 MB)
 ```
 
-The datasets must be in place before any sweep: `run_seeds.sbatch` refuses to start without
+The datasets must be in place before any sweep: `train_sweep.sbatch` refuses to start without
 them, since a mid-job download would fail after the task had already been scheduled.
 
 **If this fails with a network error**, the compute nodes have no outbound access either. Then
@@ -108,29 +124,29 @@ fetch the ~50 MB somewhere that does -- your laptop -- and copy it up:
 
 ```bash
 # locally
-python -m scripts.prefetch_data --all --data-root ./data
+python -m scripts.download_datasets --all --data-root ./data
 scp -r ./data/* mmyatmau@head1.condo.cs.cmu.edu:/data/$USER/CaCoSE/datasets/
 ```
 
-## 3. Submit the sweeps
+## 3. Run the sweeps — `scripts/submit_all_sweeps.sh`
 
 All three datasets, one at a time:
 
 ```bash
 cd /home/$USER/CaCoSE
-scripts/submit_all.sh
+scripts/submit_all_sweeps.sh
 ```
 
 Each sweep is 10 seeds capped at 3 concurrent. Submitting all three at once would allow 9, since
-each array caps independently, so `submit_all.sh` chains them with `--dependency=afterany` --
+each array caps independently, so `submit_all_sweeps.sh` chains them with `--dependency=afterany` --
 never more than 3 of your tasks run at a time. Cora and MUTAG take about a minute each, Chameleon
 about 13, so Chameleon goes last.
 
 A single dataset, or a subset:
 
 ```bash
-scripts/submit.sh configs/cora.yaml
-scripts/submit_all.sh configs/mutag.yaml configs/chameleon.yaml
+scripts/submit_sweep.sh configs/cora.yaml
+scripts/submit_all_sweeps.sh configs/mutag.yaml configs/chameleon.yaml
 ```
 
 Runs unattended. The array's `%3` (`JobArrayTaskLimit`) caps it at three seeds at a time, and
@@ -156,13 +172,13 @@ wrote  : /data/mmyatmau/CaCoSE/results/cora/4c87d394/seed00.json
 
 Cancel with `scancel <jobid>`.
 
-## 4. Collect
+## 4. Collect — `scripts/aggregate_results.py`
 
 Aggregation reads JSON only -- no container, no torch -- so it runs on head1:
 
 ```bash
 cd /home/$USER/CaCoSE
-CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.sweep_seeds
+CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.aggregate_results
 ```
 
 ```
@@ -177,7 +193,7 @@ If head1's `python3` is too old for the package, run it inside the container on 
 instead:
 
 ```bash
-srun -p pleiades --time=00:05:00 --pty     apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE     --env CACOSE_OUT=/data/$USER/CaCoSE     /data/$USER/CaCoSE/containers/cacose.sif     /opt/conda/bin/python3 -m scripts.sweep_seeds
+srun -p pleiades --time=00:05:00 --pty     apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE     --env CACOSE_OUT=/data/$USER/CaCoSE     /data/$USER/CaCoSE/containers/cacose.sif     /opt/conda/bin/python3 -m scripts.aggregate_results
 ```
 
 Then send the JSON back -- it is a few kilobytes:
@@ -212,7 +228,7 @@ rather than a stale hit. Safe to delete at any time.
 | `apptainer: command not found` | runtime not on PATH | try `singularity`, or `module load apptainer` |
 | `couldn't chdir to ...: going to /tmp` | submitted from outside the clone | `cd` into the repo first; the scripts abort with a clear message |
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
-| Job exits with `datasets missing` | step 2 not done | `sbatch slurm/prefetch.sh` |
+| Job exits with `datasets missing` | step 2 not done | `sbatch slurm/download_datasets.sbatch` |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
 | `"python": executable file not found in $PATH` | image relies on Docker's ENV PATH, ignored at exec time | use `/opt/conda/bin/python3` explicitly, as every script here does |
 | Only 3 tasks running, rest `REASON=JobArrayTaskLimit` | the `%3` cap | intended; raise it in the `--array` line if you want more |

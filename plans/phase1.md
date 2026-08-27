@@ -22,7 +22,7 @@ justification belongs there; a signature, config key, or command belongs here.
 | [x] | **1** Decomposition | `pytest tests/test_decompose.py -q` green |
 | [x] | **2** Layers | `pytest tests/test_layers.py -q` green |
 | [x] | **3** Merge + model | `pytest tests/test_merge.py tests/test_model_smoke.py -q` green |
-| [x] | **4** Data + training | `python -m scripts.run --config configs/cora.yaml --seed 0 --epochs 2` completes |
+| [x] | **4** Data + training | `python -m scripts.run_experiment --config configs/cora.yaml --seed 0 --epochs 2` completes |
 | [x] | **5** Cluster handoff | You can run `RUNBOOK.md` top to bottom unaided |
 | [x] | **6** Reproduction | Three 10-seed means clear the spec's §1 thresholds |
 
@@ -96,7 +96,7 @@ in that order. Everything marked frozen stays put even if a target is missed.
 ## Results schema
 
 Each run writes `results/<dataset>/<config_hash8>/seed<NN>.json` (nested so a sweep cannot
-overwrite its own baseline). `scripts/sweep_seeds.py` and `REPRO_REPORT.md`
+overwrite its own baseline). `scripts/aggregate_results.py` and `REPRO_REPORT.md`
 both consume this, so the field names are load-bearing:
 
 ```json
@@ -240,7 +240,7 @@ Training: cross-entropy, `Adam`, early stop on validation accuracy, restore best
 evaluate test once. Seed `torch`, `numpy`, `random`, and `torch_geometric.seed_everything`; set
 `torch.use_deterministic_algorithms(True, warn_only=True)`.
 
-`scripts/sweep_seeds.py` aggregates `results/*.json` into a markdown mean ± std table, diffed
+`scripts/aggregate_results.py` aggregates `results/*.json` into a markdown mean ± std table, diffed
 against the spec's §1 targets.
 
 ## Milestone 5 — cluster handoff
@@ -251,10 +251,10 @@ against the spec's §1 targets.
 must match `pyproject.toml` exactly, or local test results stop predicting cluster behaviour.
 cu121 covers every GPU in the cluster (sm_61 through sm_89).
 
-`slurm/run_seeds.sbatch` — array 0–9, `--partition=pleiades`, `--nodelist=pleiades-0-17`, 4 CPUs,
+`slurm/train_sweep.sbatch` — array 0–9, `--partition=pleiades`, `--nodelist=pleiades-0-17`, 4 CPUs,
 1 GPU, 16 GB, 2 h wall.
 
-`scripts/prefetch_data.py` + `RUNBOOK.md`. Compute nodes commonly have no outbound network, so PyG's
+`scripts/download_datasets.py` + `RUNBOOK.md`. Compute nodes commonly have no outbound network, so PyG's
 first-use download would fail inside the array job. The runbook has you prefetch datasets into
 `/data/$USER/datasets` once, build the `.sif` in an interactive session, then submit — copy-pasteable
 commands with expected output at each step.

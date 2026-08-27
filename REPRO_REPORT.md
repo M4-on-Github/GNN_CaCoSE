@@ -201,8 +201,8 @@ git clone https://github.com/M4-on-Github/GNN_CaCoSE.git && cd GNN_CaCoSE
 uv venv --python 3.11 && uv pip install -e ".[dev]"
 pytest
 
-python -m scripts.run --config configs/cora.yaml --seed 0
-python -m scripts.sweep_seeds
+python -m scripts.run_experiment --config configs/cora.yaml --seed 0
+python -m scripts.aggregate_results
 ```
 
 On the AART `pleiades` cluster, follow `RUNBOOK.md`. Every result records the commit it came from,

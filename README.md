@@ -52,9 +52,11 @@ cacose/
   results.py           result store and aggregation
 
 configs/               base.yaml + one per dataset (+ mutag_cv.yaml for k-fold)
-scripts/               run.py, sweep_seeds.py, prefetch_data.py, submit.sh
-slurm/                 cacose.def, build.sh, prefetch.sh, run_seeds.sbatch
-tests/                 322 tests, CPU-only and offline
+scripts/               run_experiment.py, aggregate_results.py, download_datasets.py,
+                       submit_sweep.sh, submit_all_sweeps.sh
+slurm/                 cacose.def, build_container.sbatch, download_datasets.sbatch,
+                       train_sweep.sbatch
+tests/                 CPU-only and offline
 results/               one JSON per (dataset, config, seed)   (gitignored)
 ```
 
@@ -99,8 +101,8 @@ uv venv --python 3.11
 uv pip install -e ".[dev]"
 
 pytest                                                        # unit tests, CPU, offline
-python -m scripts.run --config configs/cora.yaml --seed 0     # one run
-python -m scripts.sweep_seeds                                 # mean +/- std vs the paper
+python -m scripts.run_experiment --config configs/cora.yaml --seed 0     # one run
+python -m scripts.aggregate_results                                 # mean +/- std vs the paper
 ```
 
 Output location is controlled by two environment variables, so the same commands work locally

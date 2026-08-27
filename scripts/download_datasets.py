@@ -1,7 +1,7 @@
 """Download datasets ahead of time, on a machine that has network access.
 
-    python -m scripts.prefetch_data --config configs/cora.yaml
-    python -m scripts.prefetch_data --all
+    python -m scripts.download_datasets --config configs/cora.yaml
+    python -m scripts.download_datasets --all
 
 Compute nodes usually have no outbound network, so PyG's download-on-first-use would fail
 inside the array job -- after the job has already been queued and scheduled. Running this once

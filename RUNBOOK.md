@@ -112,18 +112,40 @@ all datasets present (~50 MB under /data/mmyatmau/CaCoSE/datasets)
 first-use download inside an array job fails after the job has already queued and been
 scheduled. `run_seeds.sbatch` refuses to start if `datasets/` is missing.
 
-## 3. Submit a sweep — held
+## 3. Submit a sweep -- held, and rebuilt first if stale
 
 ```bash
 cd /home/$USER/CaCoSE
 scripts/submit.sh configs/cora.yaml
 ```
 
-This runs `sbatch --hold`, so all 10 array tasks sit in `JobHeldUser` and **nothing starts yet**.
-The script prints the job id and the exact release command.
+`submit.sh` does three things before anything runs:
+
+1. Creates the log directory, since `sbatch` fails outright if `--output` names a missing path.
+2. Hashes `slurm/cacose.def` and compares it against the hash recorded beside the `.sif`. If
+   they differ -- or no image exists -- it submits a build job and chains the sweep behind it
+   with `--dependency=afterok`, so tasks can only start after a successful build. **This is what
+   stops a stale image from quietly producing results under the wrong dependency versions.**
+3. Submits the sweep `--hold`, so nothing starts until you release it.
+
+Output when the container is already current:
+
+```
+[container] up to date (a1b2c3d4e5f6)
+submitted held : job 27310   (configs/cora.yaml)
+```
+
+and when it is not:
+
+```
+[container] STALE -- cacose.def changed since cacose.sif was built
+[container] build job 27309 submitted; the sweep will wait for it
+submitted held : job 27310   (configs/cora.yaml)
+depends on     : build job 27309 (afterok)
+```
 
 ```bash
-squeue -j <jobid>          # ST=PD, REASON=JobHeldUser
+squeue -j <jobid>          # ST=PD, REASON=JobHeldUser (or Dependency)
 ```
 
 ## 4. Release
@@ -199,6 +221,7 @@ rather than a stale hit. Safe to delete at any time.
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
 | Job exits with `datasets missing` | step 2 not done | run `prefetch_data` on head1 |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
+| `"python": executable file not found in $PATH` | image relies on Docker's ENV PATH, which Apptainer ignores at exec time | handled: the scripts probe for the interpreter via `require_container_python`. A rebuild also fixes it permanently (`%environment` now exports PATH) |
 | Tasks pending, `REASON=JobHeldUser` | working as intended | `scontrol release <jobid>` |
 | Only 3 tasks running | the `%3` cap | intended; raise it in the `--array` line if you want more |
 

@@ -49,6 +49,29 @@ detect_container_runtime() {
     return 1
 }
 
+require_container_python() {
+    # Find the interpreter *inside* an image and set $CONTAINER_PYTHON.
+    #
+    # `apptainer exec <sif> python` fails with "executable file not found in $PATH" when the
+    # image relies on Docker's ENV PATH: Apptainer honours that during %post and %test but not
+    # at exec time. The definition now exports PATH explicitly, so a freshly built image works
+    # with a bare `python` -- this probe keeps images built before that fix usable too, and
+    # covers base images that put Python somewhere else entirely.
+    local sif=$1
+    local candidate
+    for candidate in python python3 /opt/conda/bin/python /usr/local/bin/python /usr/bin/python3; do
+        if "${CONTAINER_CMD}" exec "${sif}" "${candidate}" -c pass >/dev/null 2>&1; then
+            CONTAINER_PYTHON=${candidate}
+            echo "container python : ${CONTAINER_PYTHON}"
+            return 0
+        fi
+    done
+    echo "ERROR: no usable python found inside ${sif}" >&2
+    echo "       tried: python python3 /opt/conda/bin/python /usr/local/bin/python /usr/bin/python3" >&2
+    echo "       inspect with: ${CONTAINER_CMD} exec ${sif} sh -c 'ls /opt/conda/bin | head'" >&2
+    return 1
+}
+
 require_container_runtime() {
     if ! detect_container_runtime; then
         cat >&2 <<'MSG'

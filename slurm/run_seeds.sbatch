@@ -76,11 +76,16 @@ if [[ ! -d "${CACOSE_DATA_ROOT}" ]]; then
     exit 1
 fi
 
+# Resolve the interpreter inside the image rather than assuming `python` is on its PATH -- see
+# require_container_python. Without this, an image built before the PATH fix fails every task
+# with: "python": executable file not found in $PATH.
+require_container_python "${SIF}"
+
 "${CONTAINER_CMD}" exec --nv \
     --bind "${CACOSE_ROOT}:${CACOSE_ROOT}" \
     --bind "${CACOSE_HOME}:${CACOSE_HOME}" \
     "${SIF}" \
-    python -m scripts.run \
+    "${CONTAINER_PYTHON}" -m scripts.run \
         --config "${CONFIG}" \
         --seed "${SLURM_ARRAY_TASK_ID}"
 

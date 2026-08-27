@@ -51,6 +51,7 @@ require_container_runtime
 echo "host   : $(hostname)"
 echo "def    : ${DEF}"
 echo "target : ${SIF}"
+echo "def sha : $(sha256sum "${DEF}" | cut -d' ' -f1)"
 
 # Keep the image cache and build scratch off /home. Pulling and unpacking the CUDA base image
 # writes several GB, and /home is the 500GB quota'd partition.
@@ -87,13 +88,20 @@ if ! "${CONTAINER_CMD}" build "${SIF}" "${DEF}"; then
     "${CONTAINER_CMD}" build --fakeroot "${SIF}" "${DEF}"
 fi
 
+# Record the definition hash beside the image. scripts/submit.sh compares it against the
+# current cacose.def and rebuilds when they diverge, so a stale image cannot quietly produce
+# results under the wrong dependency versions.
+sha256sum "${DEF}" | cut -d' ' -f1 > "${SIF}.def.sha256"
+
 echo
 echo "built: ${SIF}"
 ls -lh "${SIF}"
+echo "def hash: $(cat "${SIF}.def.sha256")"
 
 echo
 echo "verifying the image can import the stack..."
-"${CONTAINER_CMD}" exec "${SIF}" python -c "
+require_container_python "${SIF}"
+"${CONTAINER_CMD}" exec "${SIF}" "${CONTAINER_PYTHON}" -c "
 import numpy, scipy, torch, torch_geometric
 print('  torch', torch.__version__, '| pyg', torch_geometric.__version__,
       '| numpy', numpy.__version__, '| scipy', scipy.__version__)
@@ -104,5 +112,5 @@ print('  stack OK')
 
 echo
 echo "next: prefetch datasets on the login node, then submit a sweep"
-echo "  ${CONTAINER_CMD} exec ${SIF} python -m scripts.prefetch_data --all"
+echo "  ${CONTAINER_CMD} exec ${SIF} ${CONTAINER_PYTHON} -m scripts.prefetch_data --all"
 echo "  scripts/submit.sh configs/cora.yaml"

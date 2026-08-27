@@ -163,6 +163,49 @@ def test_container_test_section_avoids_an_indented_heredoc():
     compile(code, "cacose.def:%test", "exec")  # must at least parse
 
 
+@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
+def test_scripts_never_assume_python_is_on_the_container_path(script):
+    """`apptainer exec <sif> python` fails with "executable file not found in $PATH".
+
+    The pytorch base image puts Python under /opt/conda via Docker's ENV PATH, which Apptainer
+    honours during %post and %test but not at exec time. Every invocation must go through the
+    probed $CONTAINER_PYTHON instead.
+    """
+    text = (REPO / "slurm" / script).read_text(encoding="utf-8")
+    assert "require_container_python" in text
+    offenders = [
+        ln.strip()
+        for ln in text.splitlines()
+        if not ln.strip().startswith("#")  # prose about the failure is not the failure
+        and "exec" in ln
+        and re.search(r"(?<![\w/${])python\b", ln)
+        and "CONTAINER_PYTHON" not in ln
+    ]
+    assert not offenders, f"bare `python` handed to exec: {offenders}"
+
+
+def def_section(name: str) -> str:
+    """One %section of the container definition, up to the next section header.
+
+    Split on headers at column 0 rather than on the bare name: section names also occur inside
+    the comments, and slicing on those truncates the section being examined.
+    """
+    text = (REPO / "slurm" / "cacose.def").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith(f"%{name}"))
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("%")), len(lines)
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_container_definition_exports_path_for_exec():
+    """%environment must put the interpreter on PATH, or a rebuilt image repeats the failure."""
+    env = def_section("environment")
+    assert "/opt/conda/bin" in env, "PATH must include the base image's conda bin"
+    assert "export PATH" in env
+
+
 def test_container_and_pyproject_pin_the_same_versions():
     """The mirrored venv only means something while these two agree."""
     proj = (REPO / "pyproject.toml").read_text(encoding="utf-8")
@@ -170,3 +213,39 @@ def test_container_and_pyproject_pin_the_same_versions():
     for pin in ("2.5.1", "2.6.1", "numpy<2"):
         assert pin in proj, f"{pin} missing from pyproject.toml"
         assert pin in dfn, f"{pin} missing from cacose.def"
+
+
+def test_container_post_symlinks_python():
+    """A symlink in /usr/local/bin (on Apptainer's default PATH) makes `python` resolve at exec
+    time even when the base image only provides it through Docker's ENV PATH."""
+    post = def_section("post")
+    assert "/usr/local/bin/python" in post and "ln -sf" in post
+
+
+def test_submit_detects_a_stale_container_and_chains_the_rebuild():
+    """A .sif built from an older definition would silently run the wrong dependency versions.
+
+    submit.sh hashes cacose.def, compares it against the hash recorded beside the image, and
+    chains the sweep behind a rebuild with --dependency=afterok when they differ.
+    """
+    submit = (REPO / "scripts" / "submit.sh").read_text(encoding="utf-8")
+    build = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
+
+    assert "sha256sum" in submit and "def.sha256" in submit
+    assert "--dependency=afterok" in submit
+    assert "--hold" in submit, "sweeps are still submitted held"
+    # the build must write the sidecar, or submit.sh would rebuild on every invocation
+    assert "def.sha256" in build and "sha256sum" in build
+
+
+def test_submit_creates_the_log_dir_before_sbatch_opens_it():
+    """sbatch fails outright if --output names a directory that does not exist.
+
+    Compares line numbers of real commands: the word "sbatch" also appears in the comments
+    explaining this very requirement, so a plain substring search finds prose, not a call.
+    """
+    lines = (REPO / "scripts" / "submit.sh").read_text(encoding="utf-8").splitlines()
+    code = [(i, ln) for i, ln in enumerate(lines) if not ln.strip().startswith("#")]
+    mkdir_at = next(i for i, ln in code if "mkdir -p" in ln)
+    first_sbatch = next(i for i, ln in code if re.search(r"sbatch\s+--", ln))
+    assert mkdir_at < first_sbatch, "log dir must be created before the first sbatch"

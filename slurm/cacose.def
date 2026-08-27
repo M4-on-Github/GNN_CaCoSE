@@ -24,6 +24,13 @@ From: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 # (sm_75) and RTX 6000 Ada (sm_89).
 
 %post
+    # Make `python` resolve at exec time. The base image only guarantees it via Docker's ENV
+    # PATH, which Apptainer applies during %post and %test but NOT to `apptainer exec` -- so
+    # without this, every job dies with: "python": executable file not found in $PATH.
+    # /usr/local/bin is on Apptainer's default PATH, so a symlink there is more robust than
+    # exporting PATH alone (both are done).
+    command -v python >/dev/null 2>&1 || ln -sf "$(command -v python3)" /usr/local/bin/python
+
     pip install --no-cache-dir \
         "numpy<2" \
         "scipy" \
@@ -34,6 +41,10 @@ From: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
         "ruff>=0.6"
 
 %environment
+    # The base image installs Python under /opt/conda via Docker's ENV PATH. Apptainer applies
+    # that during %post and %test but NOT to `apptainer exec`, so without this line every
+    # `exec ... python` fails with: "python": executable file not found in $PATH.
+    export PATH=/opt/conda/bin:${PATH}
     export PYTHONUNBUFFERED=1
     export PYTHONDONTWRITEBYTECODE=1
 

@@ -19,7 +19,7 @@ from cacose.data.base import GraphBundle
 from cacose.registry import Registry
 from cacose.types import Splits
 
-__all__ = ["SplitStrategy", "SPLITS", "FixedCountSplit", "StratifiedRatioSplit"]
+__all__ = ["SplitStrategy", "SPLITS", "FixedCountSplit", "StratifiedRatioSplit", "KFoldSplit"]
 
 SPLITS: Registry[SplitStrategy] = Registry("split strategies")
 
@@ -118,4 +118,47 @@ class ProvidedMaskSplit(SplitStrategy):
             train=column(bundle.provided_masks["train"]),
             val=column(bundle.provided_masks["val"]),
             test=column(bundle.provided_masks["test"]),
+        )
+
+
+@SPLITS.register("kfold")
+class KFoldSplit(SplitStrategy):
+    """Stratified k-fold cross-validation: the seed selects which fold is held out.
+
+    Why this exists. The paper states 80/10/10 for graph classification, but its reported MUTAG
+    accuracy of 76.99 cannot be produced that way. With 188 graphs a 10% test split is 18-19
+    graphs, so every per-seed accuracy is k/n for integer k and any 10-seed mean must be a
+    multiple of 1/(10n) -- 76.99 is not such a multiple for any n in that range. Under k-fold the
+    folds have different sizes (19 x 9 + 17), so the mean of per-fold accuracies can reach values
+    a fixed split cannot. k-fold is also the standard TUDataset protocol used by most of the
+    baselines the paper compares against.
+
+    The fold partition is fixed by `shuffle_seed` and is identical across runs; the run seed picks
+    the fold. Ten runs therefore cover every graph exactly once as test, which is what makes the
+    mean far more stable than ten independent 10% draws.
+    """
+
+    def __init__(self, folds: int = 10, shuffle_seed: int = 0) -> None:
+        if folds < 3:
+            raise ValueError(f"need at least 3 folds to carve out train/val/test, got {folds}")
+        self.folds, self.shuffle_seed = int(folds), int(shuffle_seed)
+
+    def _fold_assignment(self, labels: Tensor) -> Tensor:
+        """Stratified fold id per unit, dealt round-robin within each class."""
+        gen = self._generator(self.shuffle_seed)
+        assignment = torch.empty(labels.numel(), dtype=torch.long)
+        for cls in labels.unique().tolist():
+            members = (labels == cls).nonzero(as_tuple=True)[0]
+            members = members[torch.randperm(members.numel(), generator=gen)]
+            assignment[members] = torch.arange(members.numel()) % self.folds
+        return assignment
+
+    def make(self, bundle: GraphBundle, seed: int) -> Splits:
+        assignment = self._fold_assignment(bundle.labels)
+        test_fold = seed % self.folds
+        val_fold = (test_fold + 1) % self.folds  # the next fold validates, the rest train
+        return Splits(
+            train=((assignment != test_fold) & (assignment != val_fold)).nonzero(as_tuple=True)[0],
+            val=(assignment == val_fold).nonzero(as_tuple=True)[0],
+            test=(assignment == test_fold).nonzero(as_tuple=True)[0],
         )

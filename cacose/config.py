@@ -156,4 +156,17 @@ def _load_with_extends(path: Path, _seen: set[Path] | None = None) -> dict:
     parent = raw.get("extends")
     if not parent:
         return raw
-    return _deep_merge(_load_with_extends(path.parent / parent, _seen), raw)
+
+    base = _load_with_extends(path.parent / parent, _seen)
+
+    # `split_args` belongs to one specific split strategy, so it must not be merged across a
+    # change of strategy: inheriting the parent's ratios into, say, a k-fold split hands the
+    # constructor arguments it has never heard of. Overriding `split` therefore replaces its
+    # arguments outright instead of merging them.
+    child_split = (raw.get("data") or {}).get("split")
+    base_split = (base.get("data") or {}).get("split")
+    if child_split is not None and child_split != base_split:
+        base = dict(base)
+        base["data"] = {k: v for k, v in base.get("data", {}).items() if k != "split_args"}
+
+    return _deep_merge(base, raw)

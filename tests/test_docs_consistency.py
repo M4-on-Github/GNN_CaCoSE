@@ -249,13 +249,26 @@ def test_shell_scripts_are_executable_in_git(script):
     assert mode == "100755", f"{script} is {mode}; run: git update-index --chmod=+x {script}"
 
 
+def _ambiguity_section(report_path) -> str:
+    """Just the ambiguity log, not the whole report.
+
+    Other tables in the report have numeric first columns too -- the test-graph arithmetic in
+    the MUTAG section is one -- so matching table rows document-wide picks up rows like 18, 19
+    and 188 and reports a mismatch that is not real.
+    """
+    text = report_path.read_text(encoding="utf-8")
+    start = text.index("## 6. Ambiguity log")
+    end = text.index("## 7.", start)
+    return text[start:end]
+
+
 def test_report_ambiguity_table_matches_the_spec():
     """REPRO_REPORT.md restates the spec's ambiguity log so it can be sent to the author on its
     own. Two copies of one table is exactly how drift starts, so the row ids must agree."""
     report = REPO / "REPRO_REPORT.md"
     if not report.exists():  # pragma: no cover
         pytest.skip("report not written yet")
-    rows = set(re.findall(r"^\| (\d+[ab]?) \|", report.read_text(encoding="utf-8"), re.M))
+    rows = set(re.findall(r"^\| (\d+[ab]?) \|", _ambiguity_section(report), re.M))
     assert rows == ambiguity_ids(), (
         f"report and spec disagree; only in report: {sorted(rows - ambiguity_ids())}, "
         f"only in spec: {sorted(ambiguity_ids() - rows)}"
@@ -266,7 +279,7 @@ def test_report_marks_the_same_items_resolved_as_the_spec():
     report = REPO / "REPRO_REPORT.md"
     if not report.exists():  # pragma: no cover
         pytest.skip("report not written yet")
-    text = report.read_text(encoding="utf-8")
+    text = _ambiguity_section(report)
     for row_id in ("2", "7"):
         line = next(ln for ln in text.splitlines() if ln.startswith(f"| {row_id} |"))
         assert "Resolved" in line, f"ambiguity #{row_id} is Resolved in the spec but not here"

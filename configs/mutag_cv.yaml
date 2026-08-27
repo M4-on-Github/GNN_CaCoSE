@@ -1,0 +1,14 @@
+extends: mutag.yaml
+
+# 10-fold cross-validation instead of a single 80/10/10 draw.
+#
+# The paper states 80/10/10 for graph classification, but its reported MUTAG accuracy of 76.99
+# is arithmetically unreachable that way: with 188 graphs the test split is 18-19 graphs, so a
+# 10-seed mean must be a multiple of 1/(10n), and 76.99 is not one for any n in that range.
+# k-fold is the standard TUDataset protocol and its unequal fold sizes make 76.99 reachable.
+# Logged as spec ambiguity #12.
+data:
+  split: kfold
+  split_args:
+    folds: 10
+    shuffle_seed: 0

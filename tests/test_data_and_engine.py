@@ -277,3 +277,65 @@ def test_results_can_be_aggregated_without_torch(tmp_path):
     )
     assert proc.returncode == 0, f"aggregation needs torch:\n{proc.stderr[-800:]}"
     assert "85.00" in proc.stdout
+
+
+def test_kfold_covers_every_unit_exactly_once():
+    """Ten runs must test all 188 MUTAG graphs between them -- that complete coverage is what
+    makes a k-fold mean reachable where a fixed 10% draw's is not."""
+    labels = torch.cat([torch.zeros(63), torch.ones(125)]).long()
+    b = GraphBundle(
+        name="mutag", task="gc", graphs=[], num_features=7, num_classes=2, labels=labels
+    )
+    strategy = SPLITS.create("kfold", folds=10)
+
+    tested = []
+    for seed in range(10):
+        s = strategy.make(b, seed)
+        tested += s.test.tolist()
+        assert not (set(s.train.tolist()) & set(s.test.tolist()))
+        assert not (set(s.val.tolist()) & set(s.test.tolist()))
+    assert sorted(tested) == list(range(188)), "every graph must be held out exactly once"
+
+
+def test_kfold_partition_is_stable_across_seeds():
+    """The fold assignment is fixed; the seed only chooses which fold is held out."""
+    labels = torch.arange(100) % 2
+    b = GraphBundle(name="x", task="gc", graphs=[], num_features=1, num_classes=2, labels=labels)
+    a = SPLITS.create("kfold", folds=5, shuffle_seed=0)
+    c = SPLITS.create("kfold", folds=5, shuffle_seed=0)
+    assert a.make(b, 3).test.tolist() == c.make(b, 3).test.tolist()
+    assert a.make(b, 3).test.tolist() != a.make(b, 4).test.tolist()
+
+
+def test_kfold_folds_are_stratified():
+    labels = torch.cat([torch.zeros(63), torch.ones(125)]).long()
+    b = GraphBundle(name="m", task="gc", graphs=[], num_features=1, num_classes=2, labels=labels)
+    strategy = SPLITS.create("kfold", folds=10)
+    for seed in range(10):
+        held = labels[strategy.make(b, seed).test]
+        assert held.unique().numel() == 2, "each fold must contain both classes"
+
+
+def test_changing_split_strategy_discards_the_parent_args(tmp_path):
+    """split_args belong to one strategy. Merging a parent's ratios into a k-fold child hands
+    the constructor arguments it has never heard of -- which is exactly what happened once."""
+    (tmp_path / "base.yaml").write_text(
+        "data:\n  split: stratified_ratio\n  split_args:\n    train: 0.8\n    val: 0.1\n    test: 0.1\n"
+    )
+    (tmp_path / "child.yaml").write_text(
+        "extends: base.yaml\ndata:\n  split: kfold\n  split_args:\n    folds: 10\n"
+    )
+    cfg = RunConfig.from_yaml(tmp_path / "child.yaml")
+    assert cfg.data.split == "kfold"
+    assert cfg.data.split_args == {"folds": 10}, "parent ratios must not survive"
+    SPLITS.create(cfg.data.split, **cfg.data.split_args)  # must construct
+
+
+def test_same_split_strategy_still_merges_args(tmp_path):
+    """The replacement only applies when the strategy itself changes."""
+    (tmp_path / "base.yaml").write_text(
+        "data:\n  split: stratified_ratio\n  split_args:\n    train: 0.8\n    val: 0.1\n    test: 0.1\n"
+    )
+    (tmp_path / "child.yaml").write_text("extends: base.yaml\ndata:\n  dataset: mutag\n")
+    cfg = RunConfig.from_yaml(tmp_path / "child.yaml")
+    assert cfg.data.split_args == {"train": 0.8, "val": 0.1, "test": 0.1}

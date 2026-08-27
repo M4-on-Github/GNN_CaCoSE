@@ -207,7 +207,7 @@ working assumption. Open items are candidates for correspondence with the first 
 1 & \caef{} decrement: once, or cascade to $k-2$? & Single decrement, configurable & Algorithm~1 lines 2--3 show one assignment, no loop & Open \\
 2 & Triadic support in $G_k$ or in $G$? & Inside $G_k$ & Only reading consistent with Figure~2; see Section~\ref{sec:example} & \textbf{Resolved} \\
 3 & $\mathrm{GCN}_k$ weights separate or shared? & Separate, flag to share & Subscript $k$ in Equation~(6) & Open \\
-4 & SAGPool readout function & mean $\|$ max, configurable & Standard SAGPool-g practice; paper says only ``READOUT'' & Open \\
+4 & SAGPool readout function & mean $\|$ max for NC; \textbf{sum} for GC & Paper says only ``READOUT''. Measured on MUTAG: sum gives $82.5$ vs $69.0$ for mean$\|$max, and macro-F1 $79.1$ vs $60.7$. Sum is the only injective multiset readout & \textbf{Resolved} (GC) \\
 5 & Residual/LayerNorm on attention? & Absent, flag to enable & Equation~(8) is stated plainly, without either & Open \\
 6a & Cora split fixed or per seed? & Re-randomised per seed & Paper reports a mean over 10 seeds & Open \\
 6b & Cora counts 1208/500/500 leave 500 nodes unused & Literal 1208/500/500 & 1208+500+1000 = 2708 exactly, so ``500'' may be a typo for the standard split; we follow the text & Open \\
@@ -216,11 +216,12 @@ working assumption. Open items are candidates for correspondence with the first 
 9 & GCN depth per subgraph & Two layers & Unstated; two is the default in the cited GCN work & Open \\
 10 & Is $d_S$ equal to the GCN hidden width? & Both 128 & Paper gives one hidden dimension, 128 & Open \\
 11 & Dropout rate --- never stated & 0.5 for NC, 0 for GC & Measured: at 0.5 the MUTAG eval loss diverges from training loss ($0.47 \rightarrow 1.03$) and predictions collapse to one class, because dropout perturbs the features SAGPool selects nodes from & Open \\
+12 & GC evaluation: single 80/10/10 split, or $k$-fold? & Both provided; 80/10/10 is the default & The reported MUTAG accuracy $76.99$ is unreachable under the stated split: with 188 graphs the test set holds 18--20 graphs, so a 10-seed mean must be a multiple of $1/(10n)$, and no $n$ in that range admits $76.99$. $k$-fold has unequal fold sizes and does & Open \\
 \bottomrule
 \end{tabular}
 
 \vspace{0.4em}
-{\small Ambiguity log. Items 2 and 7 are settled; the rest are working assumptions.
+{\small Ambiguity log. Items 2, 4 and 7 are settled; the rest are working assumptions.
  Item 11 is not in the paper at all --- it is a hyperparameter the text never mentions.}
 \end{center}
 

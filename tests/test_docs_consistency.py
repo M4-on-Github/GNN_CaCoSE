@@ -215,7 +215,7 @@ def test_submit_detects_a_stale_container_and_chains_the_rebuild():
 
     assert "sha256sum" in submit and "def.sha256" in submit
     assert "--dependency=afterok" in submit
-    assert "--hold" in submit, "sweeps are still submitted held"
+    assert "--hold" not in submit, "sweeps run unattended; %3 is the only throttle"
     # the build must write the sidecar, or submit.sh would rebuild on every invocation
     assert "def.sha256" in build and "sha256sum" in build
 

@@ -2,12 +2,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Run one config across 10 seeds as a SLURM array.
 #
-#   sbatch --hold slurm/run_seeds.sbatch configs/cora.yaml
-#   scontrol release <jobid>
+#   sbatch slurm/run_seeds.sbatch configs/cora.yaml
 #
-# Two independent throttles, because they fail differently:
-#   --hold   parks every task in JobHeldUser until you release it. A manual gate.
-#   %3       caps concurrency at 3 regardless. Still holds after a blanket release.
+#   (normally submitted via scripts/submit.sh, which also rebuilds a stale container)
+#
+# %3 (JobArrayTaskLimit) caps concurrency at three tasks: SLURM runs three and starts the next
+# as each finishes, so the sweep never takes more than three GPUs at once.
 #
 # No --nodelist: peak usage is ~1-2 GB VRAM, so any node in the partition will do and the
 # queue is shorter for it. cu121 in the container covers every GPU the cluster has.
@@ -27,7 +27,7 @@ set -e
 REPO="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO"
 
-CONFIG=${1:?usage: sbatch --hold slurm/run_seeds.sbatch <config.yaml>}
+CONFIG=${1:?usage: sbatch slurm/run_seeds.sbatch <config.yaml>}
 SEED=${SLURM_ARRAY_TASK_ID:-0}
 
 DATA_DIR="/data/$USER/CaCoSE"

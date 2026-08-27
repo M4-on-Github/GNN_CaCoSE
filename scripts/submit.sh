@@ -11,8 +11,8 @@
 #      .sif. If they differ, a build job is submitted and the sweep is chained behind it with
 #      --dependency=afterok, so tasks can only start after a successful build. This is what
 #      stops a stale image from silently producing results under the wrong dependency versions.
-#   3. The sweep is submitted --hold. Nothing runs until you release it; the array's %3 cap
-#      then admits at most three seeds at a time.
+#   3. The sweep is submitted and runs unattended. The array's %3 (JobArrayTaskLimit) caps it
+#      at three seeds at a time; SLURM starts the next as each finishes.
 
 set -euo pipefail
 
@@ -56,7 +56,9 @@ else
 fi
 
 # ── the sweep itself ─────────────────────────────────────────────────────────
-JOBID=$(sbatch --hold --parsable \
+# Not held: the array's %3 (JobArrayTaskLimit) is the only throttle. SLURM starts three tasks
+# and begins the next as each finishes, so concurrency is capped without a manual gate.
+JOBID=$(sbatch --parsable \
     ${DEPENDENCY:+$DEPENDENCY} \
     --output="$LOG_DIR/cacose_%A_%a.out" \
     --error="$LOG_DIR/cacose_%A_%a.err" \
@@ -65,33 +67,26 @@ JOBID=$(sbatch --hold --parsable \
 
 cat <<EOF
 
-submitted held : job ${JOBID}   (${CONFIG})
-logs           : ${LOG_DIR}/cacose_${JOBID}_*.out
-results        : ${CACOSE_ROOT}/results/
+submitted : job ${JOBID}   (${CONFIG})
+logs      : ${LOG_DIR}/cacose_${JOBID}_*.out
+results   : ${CACOSE_ROOT}/results/
 EOF
 
 if [[ -n "$DEPENDENCY" ]]; then
     cat <<EOF
-depends on     : build job ${BUILD_JOB} (afterok)
+waiting on: build job ${BUILD_JOB} (afterok)
 
-The sweep is BOTH held and waiting on the build. Watch the build first:
+Tasks stay pending with REASON=Dependency until the build succeeds:
     tail -f ${LOG_DIR}/cacose-build_${BUILD_JOB}.out
 EOF
 fi
 
 cat <<EOF
 
-Every task sits in JobHeldUser until you release it. Check first:
+Runs on its own, 3 seeds at a time (REASON=JobArrayTaskLimit for the queued ones).
 
     squeue -j ${JOBID}
-
-Release all 10 seeds (the array's %3 cap admits 3 at a time):
-
-    scontrol release ${JOBID}
-
-Or release one seed to sanity-check before committing the rest:
-
-    scontrol release ${JOBID}_0
+    tail -f ${LOG_DIR}/cacose_${JOBID}_0.out
 
 Cancel:
 

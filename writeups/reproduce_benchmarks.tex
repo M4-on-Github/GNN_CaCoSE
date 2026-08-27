@@ -1,0 +1,409 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{hyperref}
+
+\hypersetup{colorlinks=true, linkcolor=black, urlcolor=blue, citecolor=black}
+
+\newcommand{\cacose}{\texttt{CaCoSE}}
+\newcommand{\caef}{\textit{CaEF}}
+
+\title{\vspace{-2em}CaCoSE Phase 1: Benchmark Reproduction Record\\
+\large Experimental log for the 27 August 2026 cluster run}
+\author{GNN\_CaCoSE project}
+\date{27 August 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\begin{abstract}
+\noindent This is the laboratory record of the run that produced the Phase~1 reproduction
+numbers: what was executed, on what hardware, under which commit and container, and what every
+individual seed returned. It is deliberately separate from the design specification
+(\texttt{phase1\_implementation.tex}, which states \emph{what} is built and why) and from
+\texttt{REPRO\_REPORT.md} (which states \emph{what we conclude}). This document is the evidence
+those two rest on, written so that a reader who has neither the cluster nor the raw logs can still
+audit the claims, and so that the run can be repeated exactly. Where the record is incomplete or a
+measurement is weaker than it appears, that is stated rather than omitted.
+\end{abstract}
+
+\section{Provenance}
+
+Every number in this document comes from a single batch of 30 SLURM tasks executed on
+27~August~2026. Nothing here is a local run, an average across runs, or a figure carried over from
+an earlier attempt.
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+Field & Value \\
+\midrule
+Commit & \texttt{2147b500cd12} \\
+Cluster & AART \texttt{pleiades}, partition \texttt{pleiades} \\
+Node & \texttt{pleiades-1-3} (all 30 tasks) \\
+GPU & NVIDIA GeForce GTX 1080 Ti, one per task \\
+Container & \texttt{/data/\$USER/CaCoSE/containers/cacose.sif} \\
+Wall-clock window & 15:33:30 -- 15:45:18 EDT, 27 August 2026 \\
+Python / torch & 3.11 / 2.5.1+cu121 \\
+PyG / NumPy / SciPy & 2.6.1 / 1.26.4 / 1.17.1 \\
+\bottomrule
+\end{tabular}
+\caption{Run provenance. The commit is recorded inside every result JSON by the runner, resolved on
+the host before entering the container, since the container has no \texttt{git}.}
+\end{table}
+
+All 30 tasks landed on the same node. That is convenient for comparability -- no cross-node
+hardware variation enters the seed spread -- but it was not enforced, and a rerun may distribute
+differently.
+
+\subsection{Jobs}
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{llll}
+\toprule
+Job ID & Script & Payload & Dependency \\
+\midrule
+27711 & \texttt{build\_container.sbatch} & build + verify \texttt{cacose.sif} & --- \\
+27712 & \texttt{train\_benchmark\_array.sbatch} & \texttt{configs/cora.yaml}, seeds 0--9 & \texttt{afterok:27711} \\
+27713 & \texttt{train\_benchmark\_array.sbatch} & \texttt{configs/mutag.yaml}, seeds 0--9 & \texttt{afterany:27712,afterok:27711} \\
+27714 & \texttt{train\_benchmark\_array.sbatch} & \texttt{configs/chameleon.yaml}, seeds 0--9 & \texttt{afterany:27713,afterok:27711} \\
+\bottomrule
+\end{tabular}
+\caption{The four jobs, submitted by one invocation of \texttt{scripts/submit\_all\_benchmarks.sh}.
+Each array carries \texttt{--array=0-9\%3}, so at most three seeds run concurrently; the
+\texttt{afterany} chain between datasets keeps that cap global rather than per-array.}
+\end{table}
+
+\section{The failed run that preceded this one}
+
+The first attempt at this batch produced no data at all, and the reason is worth recording because
+it was silent.
+
+\texttt{APPTAINER\_TMPDIR} had been pointed at node-local \texttt{/tmp} to suppress a cosmetic
+\texttt{nodev} warning about \texttt{/data}. On these nodes \texttt{/tmp} is \texttt{tmpfs}, i.e.\
+RAM. \texttt{mksquashfs} unpacks the entire uncompressed image into that scratch directory before
+compressing it, so the unpack was charged against the build job's memory cgroup. It ran out, and
+\emph{the build did not fail}: it wrote a \texttt{.sif} with a valid header and a truncated
+squashfs payload. \texttt{apptainer inspect} succeeded on that image, so the usual sanity check
+reported it healthy, while every \texttt{apptainer exec} --- including \texttt{exec /bin/echo} ---
+died with \texttt{input/output error}. All 30 benchmark tasks failed identically.
+
+Two things made the failure durable rather than merely annoying:
+
+\begin{enumerate}
+\item The definition's \texttt{\%test} section passed. \texttt{\%test} runs against the build tree,
+      not the finished \texttt{.sif}, so it cannot detect a truncated image and its passing was
+      false assurance.
+\item The build wrote its \texttt{.def.sha256} sidecar \emph{before} verifying the image. The hash
+      matched the definition, so the freshness check in the submission path reported the container
+      up to date and would have reused the broken image indefinitely.
+\end{enumerate}
+
+Both are fixed in the commit recorded above: scratch moved to the NAS, the sidecar is now written
+only after the finished image has been executed successfully, and a verification failure exits
+non-zero so that \texttt{--kill-on-invalid-dep} cancels the dependent sweeps. The build log for job
+27711 ends with \texttt{Verified: yes}, which under the new ordering is a statement about the
+finished artefact rather than about the build tree.
+
+\section{Protocol}
+
+One command was issued:
+
+\begin{verbatim}
+scripts/submit_all_benchmarks.sh
+\end{verbatim}
+
+which checked the container once, submitted the build, and chained the three sweeps behind it. No
+task was resubmitted, no seed was rerun, and no configuration was edited while the batch was in
+flight. That last point is stated explicitly because an earlier MUTAG measurement was contaminated
+exactly that way (see \texttt{REPRO\_REPORT.md} \S5.5), and the discipline is now part of the
+protocol rather than an assumption.
+
+Each task runs \texttt{scripts.run\_single\_experiment} inside the container under
+\texttt{--containall}, with only three bind mounts: the repository, the user's own \texttt{/data}
+tree, and node-local \texttt{/tmp}. Datasets were prefetched in a prior job, because compute nodes
+have no outbound network and a first-use download would fail after scheduling.
+
+\subsection{Configurations}
+
+Resolved configurations, as recorded inside each result JSON. Config hashes exclude the seed, so a
+hash identifies the experiment and the ten seeds are replicates of it.
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+ & Cora & Chameleon & MUTAG \\
+\midrule
+Config hash & \texttt{4c87d394} & \texttt{78dd98a6} & \texttt{ebbbb2c9} \\
+Task & node clf. & node clf. & graph clf. \\
+Provider & Planetoid & WikipediaNetwork & TUDataset \\
+Split & 1208/500/500 fixed & 0.48/0.32/0.20 strat. & 0.80/0.10/0.10 strat. \\
+Split sizes (nodes/graphs) & 1208/500/500 & 1093/729/455 & 150/18/20 \\
+$\delta$ / \caef{} mode & 3 / single & 3 / single & 3 / single \\
+Backbone / pooling & gcn / sagpool & gcn / sagpool & gcn / sagpool \\
+Readout & mean$\|$max & mean$\|$max & \textbf{sum} \\
+Attention heads & 2 & 2 & 1 \\
+Dropout & 0.5 & 0.5 & 0.0 \\
+Epochs / patience & 250 / 50 & 250 / 50 & 100 / 25 \\
+\bottomrule
+\end{tabular}
+\caption{Learning rate $2.5\times10^{-3}$, weight decay $10^{-4}$, hidden width 128, $d_S=128$,
+pooling ratio 0.5, batch size 32 throughout. Every value not stated by the paper is logged as an
+ambiguity in the specification's \S3.}
+\end{table}
+
+\section{Results}
+
+\subsection{Headline}
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{lrrrrl}
+\toprule
+Dataset & Paper & Accept at & This run & $\Delta$ & Outcome \\
+\midrule
+Cora      & 85.00 & $\geq 83.5$ & $84.64 \pm 1.75$  & $-0.36$ & PASS \\
+Chameleon & 68.99 & $\geq 66.5$ & $67.19 \pm 2.74$  & $-1.80$ & PASS \\
+MUTAG     & 76.99 & $\geq 74.0$ & $80.50 \pm 11.65$ & $+3.51$ & PASS \\
+\bottomrule
+\end{tabular}
+\caption{Test accuracy, mean $\pm$ sample standard deviation over seeds 0--9. Acceptance
+thresholds were fixed in the specification before any run and were not revised afterwards.}
+\end{table}
+
+\subsection{Per-seed results}
+
+The tables below are the complete record: nothing is excluded, and no seed was discarded. Macro-F1
+is reported alongside accuracy because on MUTAG the two diverge in a way that accuracy alone
+conceals.
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{rrrrrrr}
+\toprule
+\multicolumn{7}{c}{\textbf{Cora} (job 27712, hash \texttt{4c87d394})} \\
+\midrule
+Seed & Test acc & Macro-F1 & Best val & Epochs & Best epoch & Time (s) \\
+\midrule
+0 & 85.00 & 82.49 & 84.20 & 70 & 20 & 9.7 \\
+1 & 85.60 & 83.75 & 88.00 & 71 & 21 & 9.9 \\
+2 & 82.00 & 79.16 & 86.60 & 71 & 21 & 9.7 \\
+3 & 83.80 & 83.18 & 85.40 & 131 & 81 & 15.6 \\
+4 & 84.00 & 82.57 & 86.20 & 86 & 36 & 11.2 \\
+5 & 87.40 & 86.42 & 86.00 & 77 & 27 & 10.2 \\
+6 & 83.80 & 82.43 & 86.20 & 72 & 22 & 9.8 \\
+7 & 85.80 & 83.59 & 83.00 & 74 & 24 & 10.2 \\
+8 & 82.40 & 81.95 & 85.20 & 75 & 25 & 9.3 \\
+9 & 86.60 & 84.89 & 86.60 & 75 & 25 & 9.7 \\
+\midrule
+Mean & $84.64 \pm 1.75$ & $83.04 \pm 1.91$ & 85.74 & 80.2 & 30.2 & 10.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{rrrrrrr}
+\toprule
+\multicolumn{7}{c}{\textbf{Chameleon} (job 27714, hash \texttt{78dd98a6})} \\
+\midrule
+Seed & Test acc & Macro-F1 & Best val & Epochs & Best epoch & Time (s) \\
+\midrule
+0 & 64.18 & 64.13 & 67.76 & 105 & 55 & 108.4 \\
+1 & 67.69 & 67.76 & 68.18 & 81 & 31 & 86.9 \\
+2 & 69.89 & 69.83 & 69.55 & 162 & 112 & 164.6 \\
+3 & 67.25 & 67.43 & 69.00 & 104 & 54 & 109.6 \\
+4 & 61.32 & 61.25 & 68.72 & 85 & 35 & 89.6 \\
+5 & 68.79 & 68.65 & 68.45 & 124 & 74 & 128.3 \\
+6 & 67.91 & 67.64 & 69.41 & 99 & 49 & 105.2 \\
+7 & 67.47 & 67.18 & 69.68 & 135 & 85 & 138.0 \\
+8 & 66.59 & 66.43 & 67.22 & 134 & 84 & 133.5 \\
+9 & 70.77 & 70.60 & 70.23 & 187 & 137 & 194.0 \\
+\midrule
+Mean & $67.19 \pm 2.74$ & $67.09 \pm 2.72$ & 68.82 & 121.6 & 71.6 & 125.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{rrrrrrr}
+\toprule
+\multicolumn{7}{c}{\textbf{MUTAG} (job 27713, hash \texttt{ebbbb2c9})} \\
+\midrule
+Seed & Test acc & Macro-F1 & Best val & Epochs & Best epoch & Time (s) \\
+\midrule
+0 & 85.00 & 82.91 & 77.78 & 46 & 21 & 13.3 \\
+1 & 55.00 & 54.89 & 83.33 & 33 & 8 & 10.5 \\
+2 & 95.00 & 94.67 & 88.89 & 52 & 27 & 14.7 \\
+3 & 85.00 & 84.00 & 83.33 & 32 & 7 & 10.2 \\
+4 & 75.00 & 73.33 & 83.33 & 35 & 10 & 10.6 \\
+5 & 95.00 & 94.67 & 83.33 & 33 & 8 & 9.9 \\
+6 & 85.00 & 81.19 & 77.78 & 27 & 2 & 9.3 \\
+7 & 75.00 & 74.94 & 83.33 & 33 & 8 & 10.5 \\
+8 & 80.00 & 78.02 & 100.00 & 78 & 53 & 20.1 \\
+9 & 75.00 & 68.65 & 94.44 & 29 & 4 & 8.9 \\
+\midrule
+Mean & $80.50 \pm 11.65$ & $78.73 \pm 11.89$ & 85.56 & 39.8 & 14.8 & 11.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every run stopped early; none exhausted its epoch budget. On Cora and Chameleon this is
+unremarkable. On MUTAG it is a caveat, discussed in \S\ref{sec:threats}.
+
+\subsection{Decomposition statistics}
+
+These are structural facts about the decomposition, independent of training, and they determine
+both the cost and --- on MUTAG --- whether the method's own contribution is exercised at all.
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Dataset & $k_{\max}$ & Subgraphs & Isolated nodes & Parameters \\
+\midrule
+Cora      & 4  & 4              & 0 & 1{,}032{,}207 \\
+Chameleon & 63 & 50             & 0 & 17{,}462{,}889 \\
+MUTAG     & 2  & 376 (2/graph)  & 0 & 118{,}150 \\
+\bottomrule
+\end{tabular}
+\caption{Chameleon's 63 core levels yield roughly 50 separate GCN and pooling branches and 17.5M
+parameters fitted to 2277 nodes. This was flagged as an over-parameterisation risk in the
+specification before any run; it reproduced regardless, and \texttt{share\_weights = true} was
+never required.}
+\end{table}
+
+MUTAG's $k_{\max} = 2$ is below $\delta = 3$, so \caef{} never fires on any molecule in the
+dataset: the decomposition reduces to plain $k$-core and cross-subgraph attention operates over two
+vectors. MUTAG therefore contributes almost nothing as evidence for the paper's central claim,
+whatever its accuracy.
+
+\subsection{Cost}
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Dataset & s / seed & Total (10 seeds) & Peak parameters \\
+\midrule
+Cora      & 10.5  & 1.8 min  & 1.0M \\
+MUTAG     & 11.8  & 2.0 min  & 0.1M \\
+Chameleon & 125.8 & 21.0 min & 17.5M \\
+\midrule
+All three & --- & 24.8 min compute, 11.8 min wall & --- \\
+\bottomrule
+\end{tabular}
+\caption{Compute time is the sum over tasks; wall-clock is shorter because three seeds run
+concurrently. The whole reproduction costs under half an hour of one GTX 1080 Ti.}
+\end{table}
+
+\section{Reproducibility of this record}
+\label{sec:determinism}
+
+The runner seeds Python, NumPy, torch, CUDA and PyG, and enables
+\texttt{torch.use\_deterministic\_algorithms(True, warn\_only=True)}. Despite that, \textbf{these
+GPU numbers are not bit-reproducible}, and the logs say so explicitly: every task emitted
+
+\begin{quote}\small
+\texttt{UserWarning: Deterministic behavior was enabled ... but this operation is not
+deterministic because it uses CuBLAS and you have CUDA >= 10.2. To enable deterministic behavior
+... set CUBLAS\_WORKSPACE\_CONFIG=:4096:8}
+\end{quote}
+
+raised from \texttt{GCNConv}'s linear layer, the multi-head attention \texttt{bmm} calls, and the
+backward pass. The environment variable was not set for this run, so a rerun at the same commit may
+differ in the low-order digits. The fix is a single \texttt{--env} in the array script and is
+tracked as follow-up work; it was deliberately not applied retroactively, because doing so would
+make this document describe a run that did not happen.
+
+The \texttt{warn\_only=True} setting is itself a considered choice: several PyG kernels have no
+deterministic implementation, and hard-failing would block the run rather than make it
+reproducible.
+
+Independent evidence that the pipeline is nonetheless stable: an earlier CPU run at a different
+commit gave Cora $84.62 \pm 1.91$ and Chameleon $67.25 \pm 2.24$, against $84.64$ and $67.19$ here.
+Agreement to roughly $0.06$ across a change of hardware, backend and commit is a stronger check
+than bitwise determinism on one machine would have been.
+
+\section{Threats to validity}
+\label{sec:threats}
+
+Stated here rather than left for a reader to notice.
+
+\paragraph{MUTAG's test set has 20 graphs.} One graph is 5 percentage points. Every per-seed
+accuracy in the MUTAG table is a multiple of 5, the seed spread runs from 55.0 to 95.0, and the
+standard deviation of 11.65 is a property of the split size, not of the method. The same arithmetic
+is what shows the paper's reported 76.99 to be unreachable under its own stated 80/10/10 protocol,
+since a 10-seed mean over $n$ test graphs must be a multiple of $1/(10n)$.
+
+\paragraph{MUTAG's validation set has 18 graphs, and early stopping runs on it.} Best-epoch values
+of 2, 4, 7 and 8 appear in the table: on several seeds the validation score peaked almost
+immediately and patience 25 then halted training around epoch 30 of a 100-epoch budget. Model
+selection on 18 graphs is close to arbitrary, and this, rather than optimisation, plausibly drives
+much of the MUTAG variance.
+
+\paragraph{The MUTAG readout is our choice, not the paper's.} The paper states only ``READOUT''.
+\texttt{sum} was selected by measurement --- it is worth roughly 13 accuracy points and 18 F1
+points over mean$\|$max --- and the selection is defensible (sum is the only injective multiset
+readout, and molecular labels depend on substructure counts), but it remains a choice the paper
+does not license. Cora and Chameleon use the conventional mean$\|$max and required no such
+decision.
+
+\paragraph{Single node, single GPU model.} All 30 tasks ran on \texttt{pleiades-1-3} on one GTX
+1080 Ti. Nothing here establishes behaviour on other hardware.
+
+\paragraph{Ten seeds is few.} With Chameleon's spread of 61.3--70.8, the standard error on the mean
+is roughly 0.9 points, so the $-1.80$ gap to the paper is around two standard errors: suggestive of
+a real shortfall, not conclusive.
+
+\section{Log inventory}
+
+\texttt{/results/} is excluded from version control, so the tables above are the archival form of
+this run. The raw artefacts, should they still exist, are:
+
+\begin{table}[!htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+Artefact & Path \\
+\midrule
+Result JSON (30) & \texttt{results/<dataset>/<config\_hash>/seed<NN>.json} \\
+Task stdout (30) & \texttt{logs/cacose\_<array\_job>\_<task>.out} \\
+Task stderr (30) & \texttt{logs/cacose\_<array\_job>\_<task>.err} \\
+Build log & \texttt{logs/cacose-build\_27711.\{out,err\}} \\
+\bottomrule
+\end{tabular}
+\caption{Relative to \texttt{/data/\$USER/CaCoSE/} on the cluster. Each result JSON carries the
+commit, the fully resolved configuration, the split sizes, the torch and PyG versions, and the
+device, so any row in this document can be traced to its origin without the surrounding logs.}
+\end{table}
+
+Every task's stderr contains only the CuBLAS determinism warnings of
+\S\ref{sec:determinism} plus a note that \texttt{torch-scatter} is absent (an optional accelerator,
+not a correctness dependency). The files are byte-identical in size within a dataset, which is what
+first indicated that no task had failed.
+
+\section{Regenerating this run}
+
+\begin{verbatim}
+git clone https://github.com/M4-on-Github/GNN_CaCoSE.git
+cd GNN_CaCoSE && git checkout 2147b500cd12
+sbatch slurm/download_datasets.sbatch     # once; compute nodes have no network
+scripts/submit_all_benchmarks.sh          # builds the container if needed, then all three
+CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.aggregate_benchmark_results
+\end{verbatim}
+
+The aggregation script needs neither torch nor a GPU and reproduces the headline table from the
+JSON files alone. Subject to \S\ref{sec:determinism}, expect agreement to a few hundredths rather
+than exact equality.
+
+\end{document}

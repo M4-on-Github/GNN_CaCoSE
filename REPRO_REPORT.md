@@ -16,12 +16,13 @@ derived from the paper text, its Figure 2, and Algorithm 1 in its appendix. The 
 
 | Dataset | Task | Paper | Accept at | Ours (10 seeds) | Δ | |
 |---|---|---:|---:|---|---:|---|
-| Cora | Node classification | 85.00 | ≥ 83.5 | **84.62 ± 1.91** | −0.38 | **PASS** |
-| Chameleon | Node classification | 68.99 | ≥ 66.5 | **67.25 ± 2.24** | −1.74 | **PASS** |
-| MUTAG | Graph classification | 76.99 | ≥ 74.0 | **82.50 ± 8.58** | +5.51 | **PASS** |
+| Cora | Node classification | 85.00 | ≥ 83.5 | **84.64 ± 1.75** | −0.36 | **PASS** |
+| Chameleon | Node classification | 68.99 | ≥ 66.5 | **67.19 ± 2.74** | −1.80 | **PASS** |
+| MUTAG | Graph classification | 76.99 | ≥ 74.0 | **80.50 ± 11.65** | +3.51 | **PASS** |
 
-Mean ± sample standard deviation over seeds 0–9. Accept thresholds come from the design spec §1
-and were fixed before any run. Cora and Chameleon used the paper's settings unchanged; MUTAG
+Mean ± sample standard deviation over seeds 0–9, all from one cluster batch on 27 August 2026 —
+the full per-seed record is in `writeups/reproduce_benchmarks.tex`. Accept thresholds come from
+the design spec §1 and were fixed before any run. Cora and Chameleon used the paper's settings unchanged; MUTAG
 required choosing `readout = sum`, which the paper does not specify — see §5.
 
 Chameleon is the result that matters most for the paper's thesis: it is the heterophilic dataset
@@ -56,7 +57,7 @@ whether the method's contribution is exercised at all.
 |---|---:|---:|---:|---:|
 | Cora | 4 | 4 | 0 | 1,032,207 |
 | Chameleon | 63 | 50 | 0 | 17,462,889 |
-| MUTAG | 2 | 376 (2 per graph) | 0 | 183,942 |
+| MUTAG | 2 | 376 (2 per graph) | 0 | 118,150 |
 
 Chameleon was flagged as a risk in the spec before any run: 63 core levels means ~50 separate GCN
 and pooling branches, 17.5M parameters fitted to 2277 nodes. It reproduced anyway, and
@@ -66,12 +67,19 @@ and pooling branches, 17.5M parameters fitted to 2277 nodes. It reproduced anywa
 
 | Dataset | s/seed | total (10 seeds) |
 |---|---:|---:|
-| Cora | 7.1 | 1.2 min |
-| Chameleon | 78.4 | 13.1 min |
-| MUTAG | 7.3 | 1.2 min |
+| Cora | 10.5 | 1.8 min |
+| Chameleon | 125.8 | 21.0 min |
+| MUTAG | 11.8 | 2.0 min |
 
-RTX GPU on the AART `pleiades` cluster, 3 seeds concurrent. CPU reproduces the same numbers
-exactly, which confirms the pipeline is deterministic.
+One GTX 1080 Ti on the AART `pleiades` cluster, 3 seeds concurrent: 24.8 minutes of compute,
+11.8 minutes of wall clock for the whole reproduction.
+
+**These GPU numbers are not bit-reproducible.** Every task warned that CuBLAS ignores
+`use_deterministic_algorithms` unless `CUBLAS_WORKSPACE_CONFIG` is set, and it was not set for
+this run. What the pipeline does have is cross-platform stability: an earlier CPU run at a
+different commit gave 84.62 and 67.25 against 84.64 and 67.19 here — agreement to ~0.06 across a
+change of hardware, backend and commit. An earlier version of this section claimed CPU and GPU
+agreed *exactly*; that was wrong, and the CuBLAS warning was in the logs saying so.
 
 ## 5. Findings
 
@@ -86,6 +94,9 @@ practice. Sweeping the readout, everything else held fixed, 10 seeds each:
 | mean | 69.50 ± 7.98 | 61.47 |
 | max | 71.00 ± 6.99 | 61.17 |
 | **sum** | **82.50 ± 8.58** | **79.09** |
+
+All four rows are local CPU runs, so they compare on equal footing; the cluster rerun of the
+winning row gave 80.50 ± 11.65 (§1), well inside the seed noise of a 20-graph test set.
 
 The macro-F1 column is the real signal, not the accuracy. MUTAG is 66.5% one class; with
 mean/max the model leans on the majority (F1 ≈ 61 against 69 accuracy), and with sum it learns
@@ -130,10 +141,16 @@ MUTAG is therefore close to uninformative as evidence for the paper's central cl
 
 ### 5.4 Seed variance is large and the paper reports none
 
-Cora spans 81.2–87.8 across ten seeds; MUTAG spans 70–95 under the winning config. The paper
+Cora spans 82.0–87.4 across ten seeds, Chameleon 61.3–70.8, MUTAG 55–95 under the winning config. The paper
 reports bare means with no dispersion, so there is no way to tell whether a given number is a
 comparable mean or a favourable draw. Any single-seed comparison against this method is close to
 uninformative. **Worth raising with the first author.**
+
+Two structural causes on MUTAG, both from the split the paper specifies. The test set holds 20
+graphs, so one graph is 5 accuracy points and every per-seed score is a multiple of 5 — the
+±11.65 is a property of the split, not of the method. The validation set holds 18, and early
+stopping runs on it: best epochs of 2, 4, 7 and 8 appear in the cluster record, halting training
+near epoch 30 of a 100-epoch budget. Model selection on 18 graphs is close to arbitrary.
 
 ### 5.5 Dropout is not in the paper, and the earlier diagnosis of it was wrong
 
@@ -210,8 +227,12 @@ the resolved config, and the torch/PyG versions, so any row above can be traced 
 
 torch 2.5.1+cu121 · PyG 2.6.1 · NumPy 1.26
 
-**Provenance.** Cora (`4c87d394`) and Chameleon (`78dd98a6`) are cluster GPU runs from commit
-`1aecbcfdaec4`. The MUTAG figure above (`ebbbb2c9`, `readout: sum`) comes from the local CPU
-sweep; a cluster rerun under that config is in flight. CPU and GPU agreed to every decimal on the
-mean‖max MUTAG config, so the number is not expected to move, but this line should be updated with
-the cluster result rather than left as an assumption.
+**Provenance.** All three headline numbers are cluster GPU runs from commit `2147b500cd12`,
+executed as one batch on 27 August 2026 (SLURM jobs 27712 Cora, 27713 MUTAG, 27714 Chameleon,
+behind build 27711) on a single GTX 1080 Ti. No seed was rerun or discarded, and no config was
+edited while the batch was in flight. The per-seed tables, job metadata, threats to validity and
+log inventory are in **`writeups/reproduce_benchmarks.tex`**; this report states the conclusions,
+that document is the evidence.
+
+The sweeps in §5.1, §5.2, §5.5 and §5.6 remain local CPU runs at earlier commits. They are
+internally consistent comparisons, but they are not from this batch and are labelled as such.

@@ -36,6 +36,10 @@ SIF="$DATA_DIR/containers/cacose.sif"
 # Absolute, not `python`: apptainer exec does not inherit the Docker image's ENV PATH.
 PYTHON=/opt/conda/bin/python3
 
+# Resolved on the host: the container has no git installed, and every result records this so
+# the numbers in REPRO_REPORT.md can be traced back to a commit.
+GIT_SHA=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "")
+
 echo "=========================================="
 echo " Job         : ${SLURM_ARRAY_JOB_ID:-local}_${SEED}"
 echo " Node        : $(hostname)"
@@ -61,6 +65,7 @@ fi
 apptainer exec --containall --nv \
     --pwd "$REPO" \
     --env USER="$USER" \
+    --env CACOSE_GIT_SHA="$GIT_SHA" \
     --env XDG_CACHE_HOME="$DATA_DIR/.cache" \
     --env TORCH_HOME="$DATA_DIR/.cache/torch" \
     --env CACOSE_DATA_ROOT="$DATA_DIR/datasets" \

@@ -209,3 +209,27 @@ def test_result_json_matches_the_documented_schema(tmp_path):
     loaded = json.loads(path.read_text())
     for key in ("dataset", "seed", "config_hash", "test_acc", "kmax", "num_subgraphs"):
         assert key in loaded
+
+
+def test_git_sha_resolves_without_the_git_binary(monkeypatch):
+    """Cluster runs happen inside a container with no git installed, and --containall strips
+    the environment, so results came back with an empty provenance field. Reading .git directly
+    keeps every number in REPRO_REPORT.md traceable to a commit."""
+    from cacose.engine import runner
+
+    monkeypatch.delenv("CACOSE_GIT_SHA", raising=False)
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git not installed")
+
+    monkeypatch.setattr(runner.subprocess, "check_output", no_git)
+    sha = runner._git_sha()
+    assert sha and len(sha) == 12 and all(c in "0123456789abcdef" for c in sha)
+
+
+def test_git_sha_prefers_the_environment_override(monkeypatch):
+    """The submitting script resolves it on the host and passes it in."""
+    from cacose.engine import runner
+
+    monkeypatch.setenv("CACOSE_GIT_SHA", "abcdef123456789")
+    assert runner._git_sha() == "abcdef123456"

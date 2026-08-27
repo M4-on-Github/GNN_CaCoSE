@@ -7,9 +7,11 @@ once per seed.
 
 from __future__ import annotations
 
+import os
 import random
 import subprocess
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -45,9 +47,37 @@ def set_seed(seed: int) -> None:
 
 
 def _git_sha() -> str:
+    """Commit the results came from, so every number in the report is traceable.
+
+    Cannot rely on the `git` binary: cluster runs happen inside a container that has no git
+    installed, and `--containall` strips the environment besides. Three sources, in order of
+    reliability: an explicit env var set by the submitting script, the .git directory read
+    directly, then the binary as a last resort.
+    """
+    from_env = os.environ.get("CACOSE_GIT_SHA", "").strip()
+    if from_env:
+        return from_env[:12]
+
+    try:
+        git_dir = Path(__file__).resolve().parents[2] / ".git"
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head[:12]  # detached HEAD
+        ref = head[5:].strip()
+        loose = git_dir / ref
+        if loose.exists():
+            return loose.read_text(encoding="utf-8").strip()[:12]
+        packed = git_dir / "packed-refs"  # refs get packed once the repo is gc'd
+        if packed.exists():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if line.endswith(f" {ref}"):
+                    return line.split()[0][:12]
+    except Exception:
+        pass
+
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL
+            ["git", "rev-parse", "--short=12", "HEAD"], text=True, stderr=subprocess.DEVNULL
         ).strip()
     except Exception:
         return ""

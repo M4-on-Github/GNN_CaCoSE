@@ -1,72 +1,76 @@
 #!/bin/bash
-# Build the CaCoSE container. Self-contained: needs no other file in this repo.
+# ─────────────────────────────────────────────────────────────────────────────
+# Build cacose.sif from slurm/cacose.def.
 #
-#   sbatch slurm/build.sh      # as a batch job
-#   bash   slurm/build.sh      # or directly, anywhere apptainer works
+#   sbatch slurm/build.sh        # as a batch job
+#   bash   slurm/build.sh        # or directly
 #
-# Run it from inside the repo.
-
-#SBATCH --job-name=cacose-build
-#SBATCH --partition=pleiades
+# Run from inside the repo. Self-contained: needs no other file here.
+# ─────────────────────────────────────────────────────────────────────────────
+#SBATCH -p pleiades
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=01:00:00
+#SBATCH --time=1:00:00
+#SBATCH -J cacose-build
 #SBATCH --output=/data/%u/CaCoSE/logs/cacose-build_%j.out
 #SBATCH --error=/data/%u/CaCoSE/logs/cacose-build_%j.err
 
 set -e
-
 REPO="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO"
 
-OUT=/data/$USER/CaCoSE
-SIF=$OUT/containers/cacose.sif
-DEF=$REPO/slurm/cacose.def
+DATA_DIR="/data/$USER/CaCoSE"
+SIF="$DATA_DIR/containers/cacose.sif"
+DEF="$REPO/slurm/cacose.def"
+DEF_HASH=$(sha256sum "$DEF" | cut -d' ' -f1)
 
-mkdir -p "$OUT/containers" "$OUT/logs" "$OUT/datasets"
+# The base image keeps its interpreter here. Addressed absolutely rather than as `python`:
+# apptainer exec does not inherit the Docker image's ENV PATH, so a bare `python` is not
+# guaranteed to resolve even though it works during %post and %test.
+PYTHON=/opt/conda/bin/python3
 
-# apptainer is sometimes called singularity, sometimes behind a module
-APP=$(command -v apptainer || command -v singularity || true)
-if [ -z "$APP" ]; then
-    module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true
-    APP=$(command -v apptainer || command -v singularity || true)
-fi
-if [ -z "$APP" ]; then
-    echo "ERROR: no apptainer or singularity found" >&2
-    exit 1
-fi
+echo "=========================================="
+echo " Build job   : ${SLURM_JOB_ID:-local}"
+echo " Node        : $(hostname)"
+echo " Started     : $(date)"
+echo " Target SIF  : $SIF"
+echo " DEF hash    : $DEF_HASH"
+echo "=========================================="
 
-# node-local scratch: /data is mounted nodev, which apptainer warns about
-export APPTAINER_TMPDIR=${TMPDIR:-/tmp}/$USER-apptainer-$$
-export SINGULARITY_TMPDIR=$APPTAINER_TMPDIR
-export APPTAINER_CACHEDIR=$OUT/.cache/apptainer
-export SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
+mkdir -p "$DATA_DIR/containers" "$DATA_DIR/logs" "$DATA_DIR/datasets"
+
+# Build scratch on node-local disk: /data is mounted nodev, which apptainer warns about.
+export APPTAINER_TMPDIR="${TMPDIR:-/tmp}/$USER-apptainer-$$"
+export APPTAINER_CACHEDIR="$DATA_DIR/.cache/apptainer"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 trap 'rm -rf "$APPTAINER_TMPDIR"' EXIT
 
-echo "runtime : $APP"
-echo "def     : $DEF"
-echo "target  : $SIF"
-echo
-
 rm -f "$SIF"
-"$APP" build --fakeroot "$SIF" "$DEF"
-
-sha256sum "$DEF" | cut -d' ' -f1 > "$SIF.def.sha256"
+echo "[$(date)] Running: apptainer build --fakeroot $SIF $DEF"
+apptainer build --fakeroot "$SIF" "$DEF"
+echo "$DEF_HASH" > "$SIF.def.sha256"
+echo "[$(date)] Container ready: $SIF"
 
 echo
-echo "built: $SIF"
-ls -lh "$SIF"
-echo
-# Try `python` first; fall back to the interpreter's real location if PATH still hides it.
-for PY in python /opt/conda/bin/python python3; do
-    if "$APP" exec "$SIF" "$PY" -c pass 2>/dev/null; then
-        echo "interpreter: $PY"
-        "$APP" exec "$SIF" "$PY" -c "import torch, torch_geometric, numpy; print('torch', torch.__version__, '| pyg', torch_geometric.__version__, '| numpy', numpy.__version__)"
-        echo "OK"
-        exit 0
-    fi
-done
-echo "ERROR: no working python inside $SIF" >&2
-"$APP" exec "$SIF" sh -c 'echo PATH=$PATH; ls -l /usr/local/bin/python* 2>&1; ls /opt/conda/bin/python* 2>&1' >&2
-exit 1
+echo "[$(date)] Verifying the stack ..."
+apptainer exec --containall \
+    --pwd "$REPO" \
+    --env USER="$USER" \
+    --env HOME="$HOME" \
+    --bind /tmp:/tmp \
+    --bind "$REPO:$REPO" \
+    --bind "$DATA_DIR:$DATA_DIR" \
+    "$SIF" $PYTHON -c "
+import numpy, scipy, torch, torch_geometric
+print(' torch', torch.__version__, '| pyg', torch_geometric.__version__,
+      '| numpy', numpy.__version__, '| scipy', scipy.__version__)
+assert numpy.__version__.startswith('1.'), 'numpy must be 1.x'
+assert torch.arange(3.0).numpy().sum() == 3.0, 'torch<->numpy interop broken'
+print(' stack OK')
+"
+
+echo "=========================================="
+echo " Container ready : $SIF"
+echo " Interpreter     : $PYTHON"
+echo " Finished        : $(date)"
+echo "=========================================="

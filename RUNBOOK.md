@@ -43,7 +43,7 @@ Two things about this step:
 ```bash
 cd /home/$USER/CaCoSE
 mkdir -p /data/$USER/CaCoSE/logs
-sbatch slurm/build_container.sbatch
+sbatch slurm/build.sh
 ```
 
 Batch rather than interactive, so the build survives a dropped SSH connection and leaves a log:
@@ -67,26 +67,17 @@ Notes on what the job does:
   with nothing.
 - If an unprivileged build fails, the script retries with `--fakeroot` before giving up.
 
-### If it reports `no container runtime found`
+### If it reports `apptainer: command not found`
 
-`apptainer` is not always on the PATH, and on some clusters it is still called `singularity` or
-lives behind an environment module. Both `build_container.sbatch` and `run_seeds.sbatch` source
-`slurm/_runtime.sh`, which checks the PATH, then `module load`, then the usual install
-locations. If it still finds nothing, diagnose with:
+Try `singularity` in its place, or `module avail 2>&1 | grep -iE 'apptainer|singularity'` to see
+whether it lives behind an environment module.
 
-```bash
-command -v apptainer singularity
-module avail 2>&1 | grep -iE 'apptainer|singularity'
-ls -1 /usr/local/bin /opt 2>/dev/null | grep -iE 'apptainer|singularity'
-```
+### A note on the interpreter
 
-If the runtime exists only on the login node, build there instead -- a build is I/O bound, so it
-is far less objectionable on `head1` than training would be:
-
-```bash
-cd /home/$USER/CaCoSE
-bash slurm/build_container.sbatch      # the #SBATCH lines are inert when run directly
-```
+Every container call addresses Python absolutely, as `/opt/conda/bin/python3`. A bare `python`
+does not work: the base image exposes it through Docker's `ENV PATH`, which Apptainer honours
+during `%post` and `%test` but not at `exec` time, so `apptainer exec <sif> python` fails with
+`"python": executable file not found in $PATH`.
 
 ## 2. Prefetch datasets — on the login node, which has network
 
@@ -94,9 +85,9 @@ bash slurm/build_container.sbatch      # the #SBATCH lines are inert when run di
 cd /home/$USER/CaCoSE
 export CACOSE_DATA_ROOT=/data/$USER/CaCoSE/datasets
 
-source slurm/_runtime.sh && require_container_runtime
-"$CONTAINER_CMD" exec /data/$USER/CaCoSE/containers/cacose.sif \
-    python -m scripts.prefetch_data --all
+apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE \
+    /data/$USER/CaCoSE/containers/cacose.sif \
+    /opt/conda/bin/python3 -m scripts.prefetch_data --all
 ```
 
 Expected:
@@ -175,9 +166,10 @@ wrote  : /data/mmyatmau/CaCoSE/results/cora/66c03b2a/seed00.json
 ## 5. Collect
 
 ```bash
-source slurm/_runtime.sh && require_container_runtime
-"$CONTAINER_CMD" exec /data/$USER/CaCoSE/containers/cacose.sif \
-    env CACOSE_OUT=/data/$USER/CaCoSE python -m scripts.sweep_seeds
+apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE \
+    --env CACOSE_OUT=/data/$USER/CaCoSE \
+    /data/$USER/CaCoSE/containers/cacose.sif \
+    /opt/conda/bin/python3 -m scripts.sweep_seeds
 ```
 
 ```
@@ -216,12 +208,12 @@ rather than a stale hit. Safe to delete at any time.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `sbatch: error: Unable to open file` | `logs/` missing | `mkdir -p /data/$USER/CaCoSE/logs` |
-| `apptainer: command not found` | runtime not on PATH | the scripts auto-detect via `slurm/_runtime.sh`; see step 1 |
+| `apptainer: command not found` | runtime not on PATH | try `singularity`, or `module load apptainer` |
 | `couldn't chdir to ...: going to /tmp` | submitted from outside the clone | `cd` into the repo first; the scripts abort with a clear message |
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
 | Job exits with `datasets missing` | step 2 not done | run `prefetch_data` on head1 |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
-| `"python": executable file not found in $PATH` | image relies on Docker's ENV PATH, which Apptainer ignores at exec time | handled: the scripts probe for the interpreter via `require_container_python`. A rebuild also fixes it permanently (`%environment` now exports PATH) |
+| `"python": executable file not found in $PATH` | image relies on Docker's ENV PATH, ignored at exec time | use `/opt/conda/bin/python3` explicitly, as every script here does |
 | Tasks pending, `REASON=JobHeldUser` | working as intended | `scontrol release <jobid>` |
 | Only 3 tasks running | the `%3` cap | intended; raise it in the `--array` line if you want more |
 

@@ -82,67 +82,70 @@ def test_spec_records_the_generalised_cache_key():
     assert "cache key: (dataset, delta, caef_mode)" not in text
 
 
+SCRIPTS = ["run_seeds.sbatch", "build.sh"]
+
+
+def script_text(name: str) -> str:
+    return (REPO / "slurm" / name).read_text(encoding="utf-8")
+
+
+def directives(name: str) -> str:
+    lines = [ln for ln in script_text(name).splitlines() if ln.startswith("#SBATCH")]
+    return "\n".join(lines)
+
+
 def test_runbook_and_container_agree_on_paths():
     runbook = (REPO / "RUNBOOK.md").read_text(encoding="utf-8")
-    sbatch = (REPO / "slurm" / "run_seeds.sbatch").read_text(encoding="utf-8")
-    for fragment in ("/home/", "/data/", "containers/cacose.sif", "datasets"):
+    sbatch = script_text("run_seeds.sbatch")
+    for fragment in ("/data/", "containers/cacose.sif", "datasets"):
         assert fragment in runbook and fragment in sbatch, f"{fragment} missing from one of them"
 
 
-def test_sbatch_keeps_the_concurrency_cap_and_no_node_pin():
-    """Two throttles were a deliberate decision; losing either silently changes cluster impact."""
-    directives = [
-        ln
-        for ln in (REPO / "slurm" / "run_seeds.sbatch").read_text(encoding="utf-8").splitlines()
-        if ln.startswith("#SBATCH")
-    ]
-    joined = "\n".join(directives)
-    assert "--array=0-9%3" in joined, "the %3 concurrency cap must stay"
-    assert "--nodelist" not in joined, "pinning a node was deliberately dropped"
-    assert "--partition=pleiades" in joined
-    assert joined.count("=/data/") == 2, "both --output and --error belong under /data"
+def test_sweep_keeps_the_concurrency_cap_and_no_node_pin():
+    """Two throttles were a deliberate decision; losing either changes cluster impact."""
+    d = directives("run_seeds.sbatch")
+    assert "--array=0-9%3" in d, "the %3 concurrency cap must stay"
+    assert "--nodelist" not in d, "pinning a node was deliberately dropped"
+    assert "-p pleiades" in d or "--partition=pleiades" in d
+    assert d.count("=/data/") == 2, "both --output and --error belong under /data"
 
 
-@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
+@pytest.mark.parametrize("script", SCRIPTS)
 def test_sbatch_directives_carry_no_hardcoded_username(script):
     """#SBATCH lines do not expand $USER, so a literal username there breaks for anyone else.
 
-    SLURM's own %u placeholder does expand in output patterns. --chdir has no equivalent, which
-    is why it was dropped entirely -- a job already starts in the submission directory.
+    SLURM's %u placeholder does expand in output patterns. --chdir has no equivalent, which is
+    why it was dropped: a job already starts in the submission directory.
     """
-    directives = [
-        ln
-        for ln in (REPO / "slurm" / script).read_text(encoding="utf-8").splitlines()
-        if ln.startswith("#SBATCH")
+    d = directives(script)
+    assert "mmyatmau" not in d, "hardcoded username in a #SBATCH directive"
+    assert "--chdir" not in d, "--chdir cannot expand $USER; rely on SLURM_SUBMIT_DIR"
+    assert "/data/%u/" in d, "log paths should use SLURM's %u placeholder"
+
+
+@pytest.mark.parametrize("script", SCRIPTS)
+def test_scripts_locate_the_repo_themselves(script):
+    """SLURM copies the batch script to /var/spool/slurmd/job<id>/ before running it, so paths
+    must come from $SLURM_SUBMIT_DIR rather than the script's own location."""
+    assert "SLURM_SUBMIT_DIR" in script_text(script)
+
+
+@pytest.mark.parametrize("script", SCRIPTS)
+def test_scripts_use_the_absolute_interpreter_path(script):
+    """`apptainer exec <sif> python` fails with "executable file not found in $PATH": the base
+    image exposes Python through Docker's ENV PATH, which apptainer honours during %post and
+    %test but not at exec time. Addressing the interpreter absolutely sidesteps it entirely --
+    the approach the sibling ONR_CAI project uses on this same cluster."""
+    text = script_text(script)
+    assert "PYTHON=/opt/conda/bin/python3" in text
+    offenders = [
+        ln.strip()
+        for ln in text.splitlines()
+        if not ln.strip().startswith("#")
+        and "apptainer exec" in ln
+        and re.search(r"(?<![\w/${])python", ln)
     ]
-    joined = "\n".join(directives)
-    assert "mmyatmau" not in joined, "hardcoded username in a #SBATCH directive"
-    assert "--chdir" not in joined, "--chdir cannot expand $USER; rely on SLURM_SUBMIT_DIR"
-    assert "/data/%u/" in joined, "log paths should use SLURM's %u placeholder"
-
-
-@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
-def test_sbatch_scripts_locate_the_repo_themselves(script):
-    """Both must work from any clone path, and say so clearly when submitted from elsewhere."""
-    text = (REPO / "slurm" / script).read_text(encoding="utf-8")
-    assert "SLURM_SUBMIT_DIR" in text
-    assert "source" in text and "_runtime.sh" in text, "container runtime must be detected"
-
-
-@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
-def test_helpers_are_sourced_from_the_repo_not_the_spool_copy(script):
-    """SLURM copies the batch script to /var/spool/slurmd/job<id>/slurm_script before running it.
-
-    $BASH_SOURCE therefore points at that copy, whose directory contains no sibling files --
-    sourcing _runtime.sh relative to it fails with "No such file or directory". The helper must
-    be resolved through the repo path instead.
-    """
-    text = (REPO / "slurm" / script).read_text(encoding="utf-8")
-    assert 'source "$(dirname "${BASH_SOURCE[0]}")/_runtime.sh"' not in text, (
-        "sourcing relative to $BASH_SOURCE breaks under SLURM's spool copy"
-    )
-    assert 'source "${RUNTIME_SH}"' in text
-    assert 'RUNTIME_SH=${CACOSE_HOME}/slurm/_runtime.sh' in text
+    assert not offenders, f"bare `python` handed to apptainer exec: {offenders}"
 
 
 def test_container_test_section_avoids_an_indented_heredoc():
@@ -161,27 +164,6 @@ def test_container_test_section_avoids_an_indented_heredoc():
     indented = [ln for ln in code.splitlines() if ln.startswith((" ", "\t"))]
     assert not indented, f"python source inside %test must start at column 0: {indented[:2]}"
     compile(code, "cacose.def:%test", "exec")  # must at least parse
-
-
-@pytest.mark.parametrize("script", ["run_seeds.sbatch", "build_container.sbatch"])
-def test_scripts_never_assume_python_is_on_the_container_path(script):
-    """`apptainer exec <sif> python` fails with "executable file not found in $PATH".
-
-    The pytorch base image puts Python under /opt/conda via Docker's ENV PATH, which Apptainer
-    honours during %post and %test but not at exec time. Every invocation must go through the
-    probed $CONTAINER_PYTHON instead.
-    """
-    text = (REPO / "slurm" / script).read_text(encoding="utf-8")
-    assert "require_container_python" in text
-    offenders = [
-        ln.strip()
-        for ln in text.splitlines()
-        if not ln.strip().startswith("#")  # prose about the failure is not the failure
-        and "exec" in ln
-        and re.search(r"(?<![\w/${])python\b", ln)
-        and "CONTAINER_PYTHON" not in ln
-    ]
-    assert not offenders, f"bare `python` handed to exec: {offenders}"
 
 
 def def_section(name: str) -> str:
@@ -229,7 +211,7 @@ def test_submit_detects_a_stale_container_and_chains_the_rebuild():
     chains the sweep behind a rebuild with --dependency=afterok when they differ.
     """
     submit = (REPO / "scripts" / "submit.sh").read_text(encoding="utf-8")
-    build = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
+    build = (REPO / "slurm" / "build.sh").read_text(encoding="utf-8")
 
     assert "sha256sum" in submit and "def.sha256" in submit
     assert "--dependency=afterok" in submit

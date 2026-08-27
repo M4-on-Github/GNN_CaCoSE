@@ -50,7 +50,7 @@ else
     BUILD_JOB=$(sbatch --parsable \
         --output="$LOG_DIR/cacose-build_%j.out" \
         --error="$LOG_DIR/cacose-build_%j.err" \
-        slurm/build_container.sbatch)
+        slurm/build.sh)
     echo "[container] build job $BUILD_JOB submitted; the sweep will wait for it"
     DEPENDENCY="--dependency=afterok:${BUILD_JOB}"
 fi

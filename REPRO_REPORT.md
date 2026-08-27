@@ -35,7 +35,7 @@ ones it does not state — see the ambiguity log in §6.
 
 | | Cora | Chameleon | MUTAG |
 |---|---|---|---|
-| config hash | `4c87d394` | `78dd98a6` | `8679a605` → new hash with `readout: sum` |
+| config hash | `4c87d394` | `78dd98a6` | `ebbbb2c9` (`8679a605` was the mean‖max run) |
 | δ / caef_mode | 3 / single | 3 / single | 3 / single (inert, see §5) |
 | backbone / pooling | gcn / sagpool | gcn / sagpool | gcn / sagpool |
 | readout | mean+max | mean+max | **sum** |
@@ -208,5 +208,10 @@ python -m scripts.sweep_seeds
 On the AART `pleiades` cluster, follow `RUNBOOK.md`. Every result records the commit it came from,
 the resolved config, and the torch/PyG versions, so any row above can be traced back.
 
-torch 2.5.1+cu121 · PyG 2.6.1 · NumPy 1.26 · results from commit `1aecbcfdaec4`, except MUTAG,
-which needs a rerun under `readout: sum`.
+torch 2.5.1+cu121 · PyG 2.6.1 · NumPy 1.26
+
+**Provenance.** Cora (`4c87d394`) and Chameleon (`78dd98a6`) are cluster GPU runs from commit
+`1aecbcfdaec4`. The MUTAG figure above (`ebbbb2c9`, `readout: sum`) comes from the local CPU
+sweep; a cluster rerun under that config is in flight. CPU and GPU agreed to every decimal on the
+mean‖max MUTAG config, so the number is not expected to move, but this line should be updated with
+the cluster result rather than left as an assumption.

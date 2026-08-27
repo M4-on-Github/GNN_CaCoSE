@@ -24,7 +24,7 @@ justification belongs there; a signature, config key, or command belongs here.
 | [x] | **3** Merge + model | `pytest tests/test_merge.py tests/test_model_smoke.py -q` green |
 | [x] | **4** Data + training | `python -m scripts.run --config configs/cora.yaml --seed 0 --epochs 2` completes |
 | [x] | **5** Cluster handoff | You can run `RUNBOOK.md` top to bottom unaided |
-| [ ] | **6** Reproduction | Three 10-seed means clear the spec's §1 thresholds |
+| [x] | **6** Reproduction | Three 10-seed means clear the spec's §1 thresholds |
 
 Milestones are strictly ordered. Do not start N+1 until N's gate passes.
 
@@ -259,21 +259,30 @@ first-use download would fail inside the array job. The runbook has you prefetch
 `/data/$USER/datasets` once, build the `.sif` in an interactive session, then submit — copy-pasteable
 commands with expected output at each step.
 
-## Milestone 6 — reproduction
+## Milestone 6 — reproduction (complete)
 
-Run order Cora → Chameleon → MUTAG, 10 seeds each. Targets: spec §1, Table 1.
+All three targets met. Results, findings and the questions for the first author are in
+`REPRO_REPORT.md`; this section records only what the process turned up.
 
-You send back `results/*.json`; I aggregate and write `REPRO_REPORT.md`. If a target is missed I
-propose the next config from the frozen sweep order above and you run it; every configuration tried
-is logged in `results/REPRO_LOG.md`.
+| Dataset | Ours (10 seeds) | Paper | Accept | |
+|---|---|---:|---:|---|
+| Cora | 84.62 ± 1.91 | 85.00 | ≥ 83.5 | PASS |
+| Chameleon | 67.25 ± 2.24 | 68.99 | ≥ 66.5 | PASS |
+| MUTAG | 82.50 ± 8.58 | 76.99 | ≥ 74.0 | PASS |
 
-**Chameleon is the expected trouble spot** (spec §6 has the analysis). Now measured rather than
-predicted: `kmax=63`, 50 non-empty subgraphs, **17.5M parameters** over 2277 nodes, ~4.2 s/epoch on
-CPU. If it misses, `share_weights=true` is the first variant to try -- it collapses those 50
-branches to one.
+Cora and Chameleon needed no variation from the paper's stated settings. MUTAG did, and the
+sweep order defined before any run — `caef_mode`, `readout`, `attn_residual`, `share_weights`,
+`dropout` — earned its keep: the answer was the second item, `readout: sum`, and having the order
+fixed in advance is what makes it a permitted variation rather than a post-hoc fit.
 
-`REPRO_REPORT.md` carries the mean ± std table, the winning config, per-dataset `kmax` and subgraph
-counts, wall time, and the ambiguity log for the first author.
+Learning rate, hidden width, pooling ratio, δ, epochs and patience were never touched.
+
+**Chameleon did not need `share_weights: true`.** The spec flagged 17.5M parameters over 2277
+nodes as an overfitting risk and named that flag as the first remedy; it reproduced without it.
+
+**What to carry into Phase 2.** MUTAG showed that δ = 3 can exceed a dataset's `kmax` entirely, at
+which point CaEF never fires and the method degenerates to plain k-core with attention over a
+couple of vectors. Check `kmax` against δ before treating a dataset as evidence for the method.
 
 ---
 

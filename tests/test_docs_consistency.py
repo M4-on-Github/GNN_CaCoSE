@@ -231,3 +231,19 @@ def test_submit_creates_the_log_dir_before_sbatch_opens_it():
     mkdir_at = next(i for i, ln in code if "mkdir -p" in ln)
     first_sbatch = next(i for i, ln in code if re.search(r"sbatch\s+--", ln))
     assert mkdir_at < first_sbatch, "log dir must be created before the first sbatch"
+
+
+@pytest.mark.parametrize(
+    "script", ["scripts/submit.sh", "slurm/build.sh", "slurm/prefetch.sh", "slurm/run_seeds.sbatch"]
+)
+def test_shell_scripts_are_executable_in_git(script):
+    """`scripts/submit.sh ...` fails with Permission denied unless git stores mode 100755.
+
+    chmod on Windows does not reach the index -- git there ignores the filesystem exec bit --
+    so this has to be set with `git update-index --chmod=+x` and guarded here.
+    """
+    import subprocess
+
+    out = subprocess.check_output(["git", "ls-files", "-s", script], text=True, cwd=REPO)
+    mode = out.split()[0]
+    assert mode == "100755", f"{script} is {mode}; run: git update-index --chmod=+x {script}"

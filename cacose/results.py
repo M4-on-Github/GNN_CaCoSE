@@ -81,7 +81,7 @@ class ResultStore:
                     config_hash=cfg_hash,
                     n_seeds=len(values),
                     mean=statistics.fmean(values),
-                    # population std is undefined for one sample; report 0 rather than crashing
+                    # sample std (ddof=1) -- undefined for n=1, so report 0 rather than crashing
                     std=statistics.stdev(values) if len(values) > 1 else 0.0,
                     seeds=sorted(int(r["seed"]) for r in rows),
                 )

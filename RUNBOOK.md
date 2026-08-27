@@ -209,11 +209,17 @@ CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.aggregate_benchmark_results
 ```
 
 ```
+### CaCoSE reproduction - test_acc
+
 | dataset | config | seeds | mean +/- std | paper | delta |
 |---|---|---:|---|---:|---:|
-| cora | 4c87d394 | 10 | 84.62 +/- 1.91 | 85.00 | -0.38 |
+| chameleon | 78dd98a6 | 10 | 67.19 +/- 2.74 | 68.99 | -1.80 |
+| cora | 4c87d394 | 10 | 84.64 +/- 1.75 | 85.00 | -0.36 |
+| mutag | ebbbb2c9 | 10 | 80.50 +/- 11.65 | 76.99 | +3.51 |
 
-gate: cora [4c87d394] 84.62 vs accept >= 83.5 -> PASS
+gate: chameleon [78dd98a6] 67.19 vs accept >= 66.5 -> PASS
+gate: cora [4c87d394] 84.64 vs accept >= 83.5 -> PASS
+gate: mutag [ebbbb2c9] 80.50 vs accept >= 74.0 -> PASS
 ```
 
 If head1's `python3` is too old for the package, run it inside the container on a compute node

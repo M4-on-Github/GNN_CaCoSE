@@ -25,9 +25,12 @@ Reproduction results (paper Tables 1–2, mean ± std over 10 seeds):
 
 | Dataset | Task | Paper | Accept at | Ours (10 seeds) |
 |---|---|---|---|---|
-| Cora | Node classification | 85.00 | ≥ 83.5 | **84.62 ± 1.91** |
-| Chameleon | Node classification | 68.99 | ≥ 66.5 | **67.25 ± 2.24** |
-| MUTAG | Graph classification | 76.99 | ≥ 74.0 | **82.50 ± 8.58** |
+| Cora | Node classification | 85.00 | ≥ 83.5 | **84.64 ± 1.75** |
+| Chameleon | Node classification | 68.99 | ≥ 66.5 | **67.19 ± 2.74** |
+| MUTAG | Graph classification | 76.99 | ≥ 74.0 | **80.50 ± 11.65** |
+
+One cluster batch on 27 August 2026, commit `2147b500cd12`, one GTX 1080 Ti. Per-seed numbers and
+run provenance are in `writeups/reproduce_benchmarks.tex`.
 
 ## Layout
 
@@ -37,6 +40,7 @@ RUNBOOK.md             running it on the AART pleiades cluster
 plans/phase1.md        engineering plan - milestones, APIs, config schema
 writeups/
   phase1_implementation.tex   design spec - method, equations, ambiguity log
+  reproduce_benchmarks.tex    experimental record - per-seed results, job ids, provenance
 CaCoSE.pdf             the source paper
 
 cacose/
@@ -53,7 +57,7 @@ cacose/
 
 configs/               base.yaml + one per dataset (+ mutag_cv.yaml for k-fold)
 scripts/               run_single_experiment.py, aggregate_benchmark_results.py, download_datasets.py,
-                       submit_benchmark_sweep.sh, submit_all_benchmarks.sh
+                       ensure_container.sh, submit_benchmark_sweep.sh, submit_all_benchmarks.sh
 slurm/                 cacose.def, build_container.sbatch, download_datasets.sbatch,
                        train_benchmark_array.sbatch
 tests/                 CPU-only and offline
@@ -65,7 +69,9 @@ backbone — so the paper's Table 4 ablations and Figure 5 decomposition compari
 changes rather than code changes.
 
 Each phase gets a pair: a spec in `writeups/` (what and why — stable, edited only when a design
-decision changes) and a plan in `plans/` (how and in what order — edited every milestone).
+decision changes) and a plan in `plans/` (how and in what order — edited every milestone). A
+completed run adds a record in `writeups/` — what actually happened, append-only, never edited to
+match a later run.
 
 ## What we found
 
@@ -74,7 +80,8 @@ are the ones worth putting to the first author.
 
 - **The readout is unspecified and worth 13 accuracy points.** The paper says only "READOUT". On
   MUTAG, `sum` gives 82.50 against 69.00 for `mean+max`, and macro-F1 79.09 against 60.66 — the
-  difference between learning both classes and leaning on the majority.
+  difference between learning both classes and leaning on the majority. (That sweep is a separate
+  set of CPU runs; the cluster rerun of the winning row gave 80.50, well inside seed noise.)
 - **The reported MUTAG number is unreachable under the paper's own stated protocol.** With 188
   graphs an 80/10/10 split leaves 18–20 test graphs, so any 10-seed mean is a multiple of
   `1/(10n)`; 76.99 is not one for any n in that range. 10-fold CV, which the paper's own baselines

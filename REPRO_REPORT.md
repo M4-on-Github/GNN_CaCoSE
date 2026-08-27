@@ -71,15 +71,21 @@ and pooling branches, 17.5M parameters fitted to 2277 nodes. It reproduced anywa
 | Chameleon | 125.8 | 21.0 min |
 | MUTAG | 11.8 | 2.0 min |
 
-One GTX 1080 Ti on the AART `pleiades` cluster, 3 seeds concurrent: 24.8 minutes of compute,
+One GTX 1080 Ti on the AART `pleiades` cluster, 3 seeds concurrent: 24.7 minutes of compute,
 11.8 minutes of wall clock for the whole reproduction.
 
 **These GPU numbers are not bit-reproducible.** Every task warned that CuBLAS ignores
-`use_deterministic_algorithms` unless `CUBLAS_WORKSPACE_CONFIG` is set, and it was not set for
-this run. What the pipeline does have is cross-platform stability: an earlier CPU run at a
-different commit gave 84.62 and 67.25 against 84.64 and 67.19 here — agreement to ~0.06 across a
-change of hardware, backend and commit. An earlier version of this section claimed CPU and GPU
-agreed *exactly*; that was wrong, and the CuBLAS warning was in the logs saying so.
+`use_deterministic_algorithms` unless `CUBLAS_WORKSPACE_CONFIG` is set, and it was not set for this
+run. The size of that nondeterminism can be bounded: an earlier cluster run at commit
+`1aecbcfdaec4`, under the same config hashes, gave 84.62 and 67.25 against 84.64 and 67.19 here —
+a drift of 0.02 and 0.06, an order of magnitude below the seed standard deviations, so no
+conclusion here turns on it. (That run's node and GPU model were not recorded, so this bounds the
+combined effect of nondeterminism, commit and possibly hardware, not nondeterminism alone.)
+
+An earlier version of this section claimed CPU and GPU agreed *exactly*, which was wrong on two
+counts: the CuBLAS warning was in the logs contradicting it, and the numbers it compared were both
+GPU runs. No CPU run of these configs survives in the result store, so **no cross-platform claim is
+made** — only the commit-to-commit drift above, which is measured.
 
 ## 5. Findings
 

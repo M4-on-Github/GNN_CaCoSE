@@ -299,7 +299,7 @@ Cora      & 10.5  & 1.8 min  & 1.0M \\
 MUTAG     & 11.8  & 2.0 min  & 0.1M \\
 Chameleon & 125.8 & 21.0 min & 17.5M \\
 \midrule
-All three & --- & 24.8 min compute, 11.8 min wall & --- \\
+All three & --- & 24.7 min compute, 11.8 min wall & --- \\
 \bottomrule
 \end{tabular}
 \caption{Compute time is the sum over tasks; wall-clock is shorter because three seeds run
@@ -329,10 +329,23 @@ The \texttt{warn\_only=True} setting is itself a considered choice: several PyG 
 deterministic implementation, and hard-failing would block the run rather than make it
 reproducible.
 
-Independent evidence that the pipeline is nonetheless stable: an earlier CPU run at a different
-commit gave Cora $84.62 \pm 1.91$ and Chameleon $67.25 \pm 2.24$, against $84.64$ and $67.19$ here.
-Agreement to roughly $0.06$ across a change of hardware, backend and commit is a stronger check
-than bitwise determinism on one machine would have been.
+The practical size of that nondeterminism can be bounded from the record. An earlier cluster GPU
+run at commit \texttt{1aecbcfdaec4}, under the \emph{same} config hashes \texttt{4c87d394} and
+\texttt{78dd98a6}, gave Cora $84.62 \pm 1.91$ and Chameleon $67.25 \pm 2.24$, against $84.64$ and
+$67.19$ here: a drift of $0.02$ and $0.06$ points. The configuration is identical and the
+intervening commits touched the submission scripts rather than the model or training loop, so that
+drift is an upper bound on the nondeterminism --- an upper bound rather than a measurement of it,
+because that earlier run's node and GPU model were not recorded, and hardware may therefore be
+contributing too. Either way it is an order of magnitude below the seed standard deviations and
+affects no conclusion drawn from these means.
+
+That the earlier run's hardware went unrecorded is itself a defect in the previous bookkeeping, and
+is why the provenance table in \S1 exists.
+
+This is deliberately a weaker claim than the one an earlier draft of \texttt{REPRO\_REPORT.md}
+made. That draft asserted CPU and GPU agreed \emph{exactly}, which was both false and, as stated,
+unverifiable from the artefacts retained: no CPU run of these two configurations survives in the
+result store, so no cross-platform claim is made here at all.
 
 \section{Threats to validity}
 \label{sec:threats}

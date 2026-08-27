@@ -79,29 +79,35 @@ does not work: the base image exposes it through Docker's `ENV PATH`, which Appt
 during `%post` and `%test` but not at `exec` time, so `apptainer exec <sif> python` fails with
 `"python": executable file not found in $PATH`.
 
-## 2. Prefetch datasets — on the login node, which has network
+## 2. Prefetch datasets
 
 ```bash
 cd /home/$USER/CaCoSE
-export CACOSE_DATA_ROOT=/data/$USER/CaCoSE/datasets
-
-apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE \
-    /data/$USER/CaCoSE/containers/cacose.sif \
-    /opt/conda/bin/python3 -m scripts.prefetch_data --all
+sbatch slurm/prefetch.sh
+tail -f /data/$USER/CaCoSE/logs/cacose-prefetch_<jobid>.out
 ```
 
-Expected:
+Submitted as a job because **apptainer is not installed on head1** -- it exists only on the
+compute nodes. Expect:
 
 ```
   OK   cora (planetoid)             graphs=    1 features= 1433 classes=7
   OK   chameleon (wikipedia)        graphs=    1 features= 2325 classes=5
   OK   mutag (tudataset)            graphs=  188 features=    7 classes=2
-all datasets present (~50 MB under /data/mmyatmau/CaCoSE/datasets)
+all datasets present (~50 MB)
 ```
 
-**This step is not optional.** Compute nodes typically have no outbound network, so a
-first-use download inside an array job fails after the job has already queued and been
-scheduled. `run_seeds.sbatch` refuses to start if `datasets/` is missing.
+The datasets must be in place before any sweep: `run_seeds.sbatch` refuses to start without
+them, since a mid-job download would fail after the task had already been scheduled.
+
+**If this fails with a network error**, the compute nodes have no outbound access either. Then
+fetch the ~50 MB somewhere that does -- your laptop -- and copy it up:
+
+```bash
+# locally
+python -m scripts.prefetch_data --all --data-root ./data
+scp -r ./data/* mmyatmau@head1.condo.cs.cmu.edu:/data/$USER/CaCoSE/datasets/
+```
 
 ## 3. Submit a sweep -- held, and rebuilt first if stale
 

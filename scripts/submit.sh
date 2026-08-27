@@ -16,8 +16,17 @@
 
 set -euo pipefail
 
-CONFIG=${1:?usage: scripts/submit.sh <config.yaml> [extra sbatch args...]}
+CONFIG=${1:?usage: scripts/submit.sh <config.yaml> [--parsable] [extra sbatch args...]}
 shift || true
+
+# --parsable prints only the array job id, so submit_all.sh can chain on it. Consumed here
+# rather than forwarded, since sbatch is already given --parsable internally.
+PARSABLE=false
+ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--parsable" ]]; then PARSABLE=true; else ARGS+=("$arg"); fi
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 REPO="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$(realpath "$0")")/.." && pwd)}"
 cd "$REPO"
@@ -40,7 +49,7 @@ DEF_HASH=$(sha256sum "$DEF" | cut -d' ' -f1)
 DEPENDENCY=""
 
 if [[ -f "$SIF" && -f "$HASH_FILE" && "$DEF_HASH" == "$(cat "$HASH_FILE")" ]]; then
-    echo "[container] up to date (${DEF_HASH:0:12})"
+    [[ "$PARSABLE" == true ]] || echo "[container] up to date (${DEF_HASH:0:12})"
 else
     if [[ -f "$SIF" ]]; then
         echo "[container] STALE -- cacose.def changed since ${SIF##*/} was built"
@@ -64,6 +73,11 @@ JOBID=$(sbatch --parsable \
     --error="$LOG_DIR/cacose_%A_%a.err" \
     "$@" \
     slurm/run_seeds.sbatch "$CONFIG")
+
+if [[ "$PARSABLE" == true ]]; then
+    echo "$JOBID"
+    exit 0
+fi
 
 cat <<EOF
 

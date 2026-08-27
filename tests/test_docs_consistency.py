@@ -234,7 +234,14 @@ def test_submit_creates_the_log_dir_before_sbatch_opens_it():
 
 
 @pytest.mark.parametrize(
-    "script", ["scripts/submit.sh", "slurm/build.sh", "slurm/prefetch.sh", "slurm/run_seeds.sbatch"]
+    "script",
+    [
+        "scripts/submit.sh",
+        "scripts/submit_all.sh",
+        "slurm/build.sh",
+        "slurm/prefetch.sh",
+        "slurm/run_seeds.sbatch",
+    ],
 )
 def test_shell_scripts_are_executable_in_git(script):
     """`scripts/submit.sh ...` fails with Permission denied unless git stores mode 100755.

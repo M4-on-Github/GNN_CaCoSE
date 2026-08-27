@@ -112,11 +112,25 @@ python -m scripts.prefetch_data --all --data-root ./data
 scp -r ./data/* mmyatmau@head1.condo.cs.cmu.edu:/data/$USER/CaCoSE/datasets/
 ```
 
-## 3. Submit a sweep
+## 3. Submit the sweeps
+
+All three datasets, one at a time:
 
 ```bash
 cd /home/$USER/CaCoSE
+scripts/submit_all.sh
+```
+
+Each sweep is 10 seeds capped at 3 concurrent. Submitting all three at once would allow 9, since
+each array caps independently, so `submit_all.sh` chains them with `--dependency=afterany` --
+never more than 3 of your tasks run at a time. Cora and MUTAG take about a minute each, Chameleon
+about 13, so Chameleon goes last.
+
+A single dataset, or a subset:
+
+```bash
 scripts/submit.sh configs/cora.yaml
+scripts/submit_all.sh configs/mutag.yaml configs/chameleon.yaml
 ```
 
 Runs unattended. The array's `%3` (`JobArrayTaskLimit`) caps it at three seeds at a time, and

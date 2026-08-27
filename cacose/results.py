@@ -11,9 +11,12 @@ import json
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cacose.engine.paths import Paths
-from cacose.types import RunResult
+
+if TYPE_CHECKING:  # torch only; keeps aggregation importable without it
+    from cacose.types import RunResult
 
 __all__ = ["ResultStore", "Aggregate"]
 

@@ -7,6 +7,7 @@ unit suite, so CI stays offline-safe.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -233,3 +234,46 @@ def test_git_sha_prefers_the_environment_override(monkeypatch):
 
     monkeypatch.setenv("CACOSE_GIT_SHA", "abcdef123456789")
     assert runner._git_sha() == "abcdef123456"
+
+
+def test_results_can_be_aggregated_without_torch(tmp_path):
+    """Aggregation must work on a machine holding only the JSON files.
+
+    apptainer is not installed on the login node, so `sweep_seeds` cannot rely on the container,
+    and a login node has no torch either. The engine package therefore imports Paths eagerly and
+    everything torch-dependent lazily.
+    """
+    import os
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    results = tmp_path / "results" / "cora" / "abc12345"
+    results.mkdir(parents=True)
+    for seed, acc in enumerate([0.84, 0.86]):
+        (results / f"seed0{seed}.json").write_text(
+            json.dumps(
+                {
+                    "dataset": "cora",
+                    "task": "nc",
+                    "seed": seed,
+                    "config_hash": "abc12345",
+                    "test_acc": acc,
+                }
+            )
+        )
+
+    blocker = tmp_path / "blocker"
+    blocker.mkdir()
+    (blocker / "torch.py").write_text("raise ImportError('no torch on this machine')")
+
+    env = dict(os.environ, PYTHONPATH=f"{blocker}{os.pathsep}{repo}")
+    proc = subprocess.run(
+        [sys.executable, "-m", "scripts.sweep_seeds", "--out", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=repo,
+    )
+    assert proc.returncode == 0, f"aggregation needs torch:\n{proc.stderr[-800:]}"
+    assert "85.00" in proc.stdout

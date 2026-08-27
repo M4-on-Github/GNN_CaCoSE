@@ -13,21 +13,21 @@ text, its Figure 2 worked example, and Algorithm 1 in its appendix.
 
 ## Status
 
-**Phase 1 — design complete, implementation not started.**
+**Phase 1 — implemented; reproduction in progress.**
 
 | Phase | Goal | State |
 |---|---|---|
-| 1 | Reproduce the paper on Cora, Chameleon, MUTAG | Spec written; code not started |
+| 1 | Reproduce the paper on Cora, Chameleon, MUTAG | Package complete, 315 tests; Cora reproduces, other two running |
 | 2 | Apply the method to a new domain | Not started |
 | 3 | Attention visualiser | Not started |
 
 Phase 1 reproduction targets (paper Tables 1–2, mean over 10 seeds):
 
-| Dataset | Task | Paper | Accept at |
-|---|---|---|---|
-| Cora | Node classification | 85.00 | ≥ 83.5 |
-| Chameleon | Node classification | 68.99 | ≥ 66.5 |
-| MUTAG | Graph classification | 76.99 | ≥ 74.0 |
+| Dataset | Task | Paper | Accept at | Ours (10 seeds) |
+|---|---|---|---|---|
+| Cora | Node classification | 85.00 | ≥ 83.5 | **84.62 ± 1.91** |
+| Chameleon | Node classification | 68.99 | ≥ 66.5 | running |
+| MUTAG | Graph classification | 76.99 | ≥ 74.0 | running |
 
 ## Layout
 

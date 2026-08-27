@@ -14,6 +14,7 @@ Copy-pasteable, in order. Steps 0–2 are one-time setup; step 3 onward is per s
   cache/decompositions/         written on first run, reused by every later seed
   logs/                         cacose_<jobid>_<task>.out / .err
   results/<dataset>/<confighash>/seed<NN>.json
+  .cache/                       apptainer image cache; safe to delete
 ```
 
 ---
@@ -63,9 +64,11 @@ Notes on what the job does:
   CUDA is exercised for real by the first training job.
 - **Cache and scratch go to `/data`.** Pulling the CUDA base image writes several GB, and `/home`
   is the quota'd partition.
-- **An existing `.sif` is moved aside, not overwritten**, so a failed rebuild cannot leave you
-  with nothing.
-- If an unprivileged build fails, the script retries with `--fakeroot` before giving up.
+- **An existing `.sif` is deleted first.** A rebuild replaces the image rather than layering on
+  it; if you need to keep the old one, copy it aside before submitting.
+- **Builds always use `--fakeroot`.** Your account is not in `/etc/subuid`, so apptainer falls
+  back to a root-mapped namespace -- the `User not listed in /etc/subuid` line in the log is
+  expected, not an error.
 
 ### If it reports `apptainer: command not found`
 
@@ -134,35 +137,43 @@ A healthy task ends with:
 
 ```
 done   : test_acc=0.8560 best_val=0.8520 epochs=40 (best 20) kmax=4 subgraphs=4 params=1,032,207 5.13s
-wrote  : /data/mmyatmau/CaCoSE/results/cora/66c03b2a/seed00.json
+wrote  : /data/mmyatmau/CaCoSE/results/cora/4c87d394/seed00.json
 ```
 
 Cancel with `scancel <jobid>`.
 
-## 5. Collect
+## 4. Collect
+
+Aggregation reads JSON only -- no container, no torch -- so it runs on head1:
 
 ```bash
-apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE \
-    --env CACOSE_OUT=/data/$USER/CaCoSE \
-    /data/$USER/CaCoSE/containers/cacose.sif \
-    /opt/conda/bin/python3 -m scripts.sweep_seeds
+cd /home/$USER/CaCoSE
+CACOSE_OUT=/data/$USER/CaCoSE python3 -m scripts.sweep_seeds
 ```
 
 ```
 | dataset | config | seeds | mean +/- std | paper | delta |
 |---|---|---:|---|---:|---:|
-| cora | 66c03b2a | 10 | 8x.xx +/- x.xx | 85.00 | +x.xx |
+| cora | 4c87d394 | 10 | 84.62 +/- 1.91 | 85.00 | -0.38 |
 
-gate: cora [66c03b2a] 8x.xx vs accept >= 83.5 -> PASS
+gate: cora [4c87d394] 84.62 vs accept >= 83.5 -> PASS
 ```
 
-Then send back the JSON files, which are small:
+If head1's `python3` is too old for the package, run it inside the container on a compute node
+instead:
 
 ```bash
-tar czf cora_results.tgz -C /data/$USER/CaCoSE results/cora
+srun -p pleiades --time=00:05:00 --pty     apptainer exec --bind /data/$USER/CaCoSE:/data/$USER/CaCoSE     --env CACOSE_OUT=/data/$USER/CaCoSE     /data/$USER/CaCoSE/containers/cacose.sif     /opt/conda/bin/python3 -m scripts.sweep_seeds
 ```
 
-Repeat steps 3–5 for `configs/chameleon.yaml` and `configs/mutag.yaml`.
+Then send the JSON back -- it is a few kilobytes:
+
+```bash
+tar czf cacose_results.tgz -C /data/$USER/CaCoSE results
+```
+
+Repeat steps 3-4 for `configs/mutag.yaml` and `configs/chameleon.yaml`. Chameleon last: it is
+the slow one (`kmax=63`, 17.5M parameters).
 
 ---
 
@@ -187,11 +198,11 @@ rather than a stale hit. Safe to delete at any time.
 | `apptainer: command not found` | runtime not on PATH | try `singularity`, or `module load apptainer` |
 | `couldn't chdir to ...: going to /tmp` | submitted from outside the clone | `cd` into the repo first; the scripts abort with a clear message |
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
-| Job exits with `datasets missing` | step 2 not done | run `prefetch_data` on head1 |
+| Job exits with `datasets missing` | step 2 not done | `sbatch slurm/prefetch.sh` |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
 | `"python": executable file not found in $PATH` | image relies on Docker's ENV PATH, ignored at exec time | use `/opt/conda/bin/python3` explicitly, as every script here does |
 | Only 3 tasks running, rest `REASON=JobArrayTaskLimit` | the `%3` cap | intended; raise it in the `--array` line if you want more |
 
-**Never train on head1.** It is a login node. Step 1 is a batch job and step 5 is a few seconds of
-aggregation; step 2 is a download, which is fine there. Only fall back to building on head1 if the
-container runtime turns out to exist nowhere else.
+**Never train on head1.** It is a login node. Steps 1-3 are all batch jobs, which is also forced
+by apptainer being installed only on the compute nodes. Step 4 is a few seconds of reading JSON
+and needs neither the container nor torch, so it runs fine on head1.

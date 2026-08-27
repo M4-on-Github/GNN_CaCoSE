@@ -247,3 +247,26 @@ def test_shell_scripts_are_executable_in_git(script):
     out = subprocess.check_output(["git", "ls-files", "-s", script], text=True, cwd=REPO)
     mode = out.split()[0]
     assert mode == "100755", f"{script} is {mode}; run: git update-index --chmod=+x {script}"
+
+
+def test_report_ambiguity_table_matches_the_spec():
+    """REPRO_REPORT.md restates the spec's ambiguity log so it can be sent to the author on its
+    own. Two copies of one table is exactly how drift starts, so the row ids must agree."""
+    report = REPO / "REPRO_REPORT.md"
+    if not report.exists():  # pragma: no cover
+        pytest.skip("report not written yet")
+    rows = set(re.findall(r"^\| (\d+[ab]?) \|", report.read_text(encoding="utf-8"), re.M))
+    assert rows == ambiguity_ids(), (
+        f"report and spec disagree; only in report: {sorted(rows - ambiguity_ids())}, "
+        f"only in spec: {sorted(ambiguity_ids() - rows)}"
+    )
+
+
+def test_report_marks_the_same_items_resolved_as_the_spec():
+    report = REPO / "REPRO_REPORT.md"
+    if not report.exists():  # pragma: no cover
+        pytest.skip("report not written yet")
+    text = report.read_text(encoding="utf-8")
+    for row_id in ("2", "7"):
+        line = next(ln for ln in text.splitlines() if ln.startswith(f"| {row_id} |"))
+        assert "Resolved" in line, f"ambiguity #{row_id} is Resolved in the spec but not here"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from cacose.engine import Paths
+from cacose.engine.paths import Paths
 from cacose.results import ResultStore
 
 # Paper Tables 1 and 2, and the tolerance Phase 1 accepts (see the design spec, section 1).
@@ -30,6 +30,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--dataset", help="restrict to one dataset")
     p.add_argument("--metric", default="test_acc")
     p.add_argument("--out", help="override $CACOSE_OUT")
+    # Deliberately imports nothing that needs torch, so results can be aggregated on a login
+    # node or any machine holding the JSON files -- no container required.
     return p.parse_args(argv)
 
 

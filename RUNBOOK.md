@@ -84,8 +84,12 @@ Notes on what the job does:
 - **No GPU requested.** A build unpacks an image and runs pip; it is I/O bound. The definition's
   `%test` therefore prints `cuda available: False`, which is expected here and not a problem --
   CUDA is exercised for real by the first training job.
-- **Cache and scratch go to `/data`.** Pulling the CUDA base image writes several GB, and `/home`
-  is the quota'd partition.
+- **Cache and scratch go to `/data`, deliberately not `/tmp`.** `/tmp` on these nodes is tmpfs,
+  i.e. RAM. `mksquashfs` unpacks the whole image into `APPTAINER_TMPDIR` before compressing it,
+  so putting that on `/tmp` charges gigabytes to the job's memory cgroup. Running out does not
+  fail the build: it writes a `.sif` with a valid header and a truncated payload, which then
+  fails every `apptainer exec` with `input/output error`. Apptainer's `nodev` warning about
+  `/data` is cosmetic by comparison.
 - **An existing `.sif` is deleted first.** A rebuild replaces the image rather than layering on
   it; if you need to keep the old one, copy it aside before submitting.
 - **Builds always use `--fakeroot`.** Your account is not in `/etc/subuid`, so apptainer falls
@@ -236,6 +240,7 @@ rather than a stale hit. Safe to delete at any time.
 | Job exits with `container not found` | step 1 not done | build the `.sif` |
 | Job exits with `datasets missing` | step 2 not done | `sbatch slurm/download_datasets.sbatch` |
 | `_ARRAY_API not found` | NumPy 2 reached the image | rebuild; the `%test` block should have caught it |
+| `exec ... failed: input/output error` | truncated `.sif` -- the build ran out of memory with scratch on tmpfs | `apptainer inspect` still succeeds on a truncated image, so it proves nothing; rebuild with `APPTAINER_TMPDIR` on `/data` and enough `--mem` |
 | `"python": executable file not found in $PATH` | image relies on Docker's ENV PATH, ignored at exec time | use `/opt/conda/bin/python3` explicitly, as every script here does |
 | Only 3 tasks running, rest `REASON=JobArrayTaskLimit` | the `%3` cap | intended; raise it in the `--array` line if you want more |
 

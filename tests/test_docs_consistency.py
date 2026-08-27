@@ -433,3 +433,16 @@ def test_container_sees_only_the_three_intended_binds(script):
     assert sources, "expected at least one --bind"
     allowed = {"/tmp", "$REPO", "${REPO}", "$DATA_DIR", "${DATA_DIR}"}
     assert sources <= allowed, f"{script} binds {sources - allowed}, outside the intended three"
+
+
+def test_build_scratch_is_not_on_tmpfs():
+    """/tmp on these nodes is RAM. mksquashfs unpacks the whole image into APPTAINER_TMPDIR
+    before compressing, so pointing it at /tmp charges gigabytes against the job's memory
+    cgroup. Running out does not fail loudly -- it writes a .sif with a valid header and a
+    truncated payload, and every later exec dies with "input/output error"."""
+    text = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
+    line = next(
+        ln for ln in text.splitlines() if ln.strip().startswith("export APPTAINER_TMPDIR=")
+    )
+    assert "/tmp" not in line, f"build scratch must not be on tmpfs: {line.strip()}"
+    assert "$DATA_DIR" in line, "build scratch belongs on the NAS"

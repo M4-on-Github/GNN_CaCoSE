@@ -39,25 +39,34 @@ echo "=========================================="
 
 mkdir -p "$DATA_DIR/containers" "$DATA_DIR/logs" "$DATA_DIR/datasets"
 
-# Build scratch on node-local disk: /data is mounted nodev, which apptainer warns about.
-export APPTAINER_TMPDIR="${TMPDIR:-/tmp}/$USER-apptainer-$$"
+# Build scratch goes on the NAS, NOT /tmp.
+#
+# /tmp on these nodes is tmpfs, i.e. RAM. mksquashfs unpacks the entire image there before
+# compressing it, so pointing APPTAINER_TMPDIR at /tmp charges several gigabytes against the
+# job's memory cgroup. When it runs out the build does not fail loudly: it writes a .sif whose
+# header is valid -- `apptainer inspect` succeeds -- but whose squashfs payload is truncated, and
+# every later `apptainer exec` dies with "input/output error", including exec of /bin/echo.
+#
+# That cost a full round of failed benchmarks. Apptainer warns that /data is mounted nodev during
+# the build; that warning is cosmetic and the build works anyway.
+export APPTAINER_TMPDIR="$DATA_DIR/.cache/apptainer_tmp"
 export APPTAINER_CACHEDIR="$DATA_DIR/.cache/apptainer"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
-trap 'rm -rf "$APPTAINER_TMPDIR"' EXIT
 
-rm -f "$SIF"
-echo "[$(date)] Running: apptainer build --fakeroot $SIF $DEF"
-apptainer build --fakeroot "$SIF" "$DEF"
+# --force replaces an existing image in one step. Deleting it first leaves nothing behind if the
+# build then fails.
+echo "[$(date)] Running: apptainer build --force --fakeroot $SIF $DEF"
+apptainer build --force --fakeroot "$SIF" "$DEF"
 echo "$DEF_HASH" > "$SIF.def.sha256"
 echo "[$(date)] Container ready: $SIF"
 
 echo
 echo "[$(date)] Verifying the stack ..."
 
-# /data is network storage, and exec'ing a multi-gigabyte .sif immediately after writing it can
-# fail with "input/output error" while the file is still settling. That is transient, so retry
-# rather than failing the job: an aborted build leaves every dependent array stuck in
-# DependencyNeverSatisfied, which is a far worse outcome than waiting ten seconds.
+# Retry, and never fail the job on this check. An "input/output error" here means the image is
+# unusable -- see the APPTAINER_TMPDIR comment above for the cause that produced one -- but the
+# right response is a loud warning, not aborting: a failed build job leaves every benchmark
+# chained behind it stuck in DependencyNeverSatisfied.
 sync || true
 
 verify() {
@@ -85,18 +94,24 @@ for attempt in 1 2 3 4 5; do
         VERIFIED=true
         break
     fi
-    echo "[$(date)] verification attempt ${attempt} failed; the image may still be settling on /data"
+    echo "[$(date)] verification attempt ${attempt} failed"
     sleep 10
 done
 
 if [ "$VERIFIED" != true ]; then
-    # The image itself is already built and its %test section passed inside the build, so the
-    # stack is known good. Report loudly but do not fail: failing here would cancel every
-    # benchmark chained behind this job.
-    echo "WARNING: could not exec the image after 5 attempts." >&2
-    echo "         The build itself succeeded and its %test passed, so the .sif should be" >&2
-    echo "         usable. Check by hand:" >&2
-    echo "           apptainer exec $SIF $PYTHON -c 'import torch; print(torch.__version__)'" >&2
+    # Warn rather than exit: a failed build job leaves every benchmark chained behind it stuck
+    # in DependencyNeverSatisfied. But do not pretend the image is fine -- a build whose %test
+    # passed can still produce an unusable .sif, which is exactly what a truncated squashfs
+    # looks like.
+    echo "WARNING: the image cannot be executed. It is probably NOT usable." >&2
+    echo "         A %test that passed does not clear it: %test runs against the build tree," >&2
+    echo "         not the finished .sif." >&2
+    echo "         'input/output error' here means a truncated squashfs -- most likely the" >&2
+    echo "         build ran out of memory with APPTAINER_TMPDIR on tmpfs, or --mem was too" >&2
+    echo "         low. Confirm with:" >&2
+    echo "           apptainer inspect $SIF        # header only; succeeds even when truncated" >&2
+    echo "           apptainer exec $SIF /bin/echo hi" >&2
+    echo "         Then rebuild with more memory." >&2
 fi
 
 echo "=========================================="

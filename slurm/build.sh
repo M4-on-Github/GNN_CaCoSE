@@ -56,7 +56,8 @@ echo "[$(date)] Verifying the stack ..."
 apptainer exec --containall \
     --pwd "$REPO" \
     --env USER="$USER" \
-    --env HOME="$HOME" \
+    --env XDG_CACHE_HOME="$DATA_DIR/.cache" \
+    --env TORCH_HOME="$DATA_DIR/.cache/torch" \
     --bind /tmp:/tmp \
     --bind "$REPO:$REPO" \
     --bind "$DATA_DIR:$DATA_DIR" \

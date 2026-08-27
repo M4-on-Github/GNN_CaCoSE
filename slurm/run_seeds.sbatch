@@ -61,7 +61,8 @@ fi
 apptainer exec --containall --nv \
     --pwd "$REPO" \
     --env USER="$USER" \
-    --env HOME="$HOME" \
+    --env XDG_CACHE_HOME="$DATA_DIR/.cache" \
+    --env TORCH_HOME="$DATA_DIR/.cache/torch" \
     --env CACOSE_DATA_ROOT="$DATA_DIR/datasets" \
     --env CACOSE_OUT="$DATA_DIR" \
     --env PYTHONPATH="$REPO" \

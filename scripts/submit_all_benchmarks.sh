@@ -36,11 +36,20 @@ for cfg in "${CONFIGS[@]}"; do
     fi
     if [ -n "$PREV" ]; then
         JOB=$(scripts/submit_benchmark_sweep.sh "$cfg" --parsable --dependency="afterany:${PREV}")
-        echo "queued : $(basename "$cfg" .yaml)  job $JOB   (after $PREV)"
+        WHEN="after $PREV"
     else
         JOB=$(scripts/submit_benchmark_sweep.sh "$cfg" --parsable)
-        echo "queued : $(basename "$cfg" .yaml)  job $JOB   (starts now)"
+        WHEN="starts now"
     fi
+
+    # A job id is all that may reach stdout. Anything else means a status line leaked into it,
+    # and chaining --dependency on that produces only SLURM's opaque "Job dependency problem".
+    if ! [[ "$JOB" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: expected a job id from submit_benchmark_sweep.sh, got: '$JOB'" >&2
+        echo "       status output must go to stderr so stdout carries only the id" >&2
+        exit 1
+    fi
+    echo "queued : $(basename "$cfg" .yaml)  job $JOB   ($WHEN)"
     IDS+=("$JOB")
     PREV="$JOB"
 done

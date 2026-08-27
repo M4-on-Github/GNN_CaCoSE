@@ -313,3 +313,44 @@ def test_sbatch_job_names_match_their_filenames():
         found = re.search(r"^#SBATCH (?:-J|--job-name=)\s*(\S+)", text, re.M)
         assert found, f"{filename} sets no job name"
         assert found.group(1) == job_name, f"{filename}: job name is {found.group(1)!r}"
+
+
+def test_submit_sweep_writes_only_the_job_id_to_stdout():
+    """--parsable exists so submit_all_benchmarks.sh can chain --dependency on the job id.
+
+    Any status line reaching stdout is captured as part of that id, and SLURM then rejects the
+    next submission with the opaque "Job dependency problem" -- which is exactly what happened
+    the first time this ran on the cluster. Status must go to stderr.
+    """
+    text = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
+    body = text[text.index("# ── container freshness") :]
+
+    offenders = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(("echo ", "printf ", "cat <<")):
+            continue
+        if ">&2" in stripped or stripped.startswith("say "):
+            continue
+        if stripped == 'echo "$JOBID"':  # the one legitimate stdout write
+            continue
+        # the human-readable summary only runs when not parsable, which exits before it
+        if "PARSABLE" in body[: body.index(line)].rsplit("if", 1)[-1]:
+            continue
+        offenders.append(stripped)
+
+    assert 'echo "$JOBID"' in body, "parsable mode must emit the job id"
+    assert "say()" in text, "status helper must exist so messages default to stderr"
+    early = body[: body.index('echo "$JOBID"')]
+    leaked = [
+        ln.strip()
+        for ln in early.splitlines()
+        if ln.strip().startswith("echo ") and ">&2" not in ln
+    ]
+    assert not leaked, f"status written to stdout before the job id: {leaked}"
+
+
+def test_submit_all_validates_the_job_id_before_chaining():
+    """A malformed id must fail with an explanation, not with SLURM's dependency error."""
+    text = (REPO / "scripts" / "submit_all_benchmarks.sh").read_text(encoding="utf-8")
+    assert "^[0-9]+$" in text, "the chained job id must be validated as numeric"

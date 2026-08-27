@@ -48,19 +48,25 @@ mkdir -p "$LOG_DIR" "$CACOSE_ROOT/containers"
 DEF_HASH=$(sha256sum "$DEF" | cut -d' ' -f1)
 DEPENDENCY=""
 
+# Status goes to stderr, never stdout. Under --parsable the caller reads stdout to get the job
+# id and chain the next sweep onto it; a stray status line there is captured as part of the id
+# and the next --dependency is rejected with "Job dependency problem". Stderr still shows on a
+# terminal, so nothing is hidden from a human.
+say() { echo "$@" >&2; }
+
 if [[ -f "$SIF" && -f "$HASH_FILE" && "$DEF_HASH" == "$(cat "$HASH_FILE")" ]]; then
-    [[ "$PARSABLE" == true ]] || echo "[container] up to date (${DEF_HASH:0:12})"
+    say "[container] up to date (${DEF_HASH:0:12})"
 else
     if [[ -f "$SIF" ]]; then
-        echo "[container] STALE -- cacose.def changed since ${SIF##*/} was built"
+        say "[container] STALE -- cacose.def changed since ${SIF##*/} was built"
     else
-        echo "[container] missing"
+        say "[container] missing -- building it first"
     fi
     BUILD_JOB=$(sbatch --parsable \
         --output="$LOG_DIR/cacose-build_%j.out" \
         --error="$LOG_DIR/cacose-build_%j.err" \
         slurm/build_container.sbatch)
-    echo "[container] build job $BUILD_JOB submitted; the sweep will wait for it"
+    say "[container] build job $BUILD_JOB submitted; the sweep will wait for it"
     DEPENDENCY="--dependency=afterok:${BUILD_JOB}"
 fi
 

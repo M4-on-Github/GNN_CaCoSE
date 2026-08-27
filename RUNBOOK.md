@@ -14,8 +14,9 @@ scripts/submit_all_benchmarks.sh        # all three datasets, one at a time
 | `slurm/build_container.sbatch` | builds `cacose.sif` from `cacose.def` | `sbatch` (step 1) |
 | `slurm/download_datasets.sbatch` | fetches Cora / Chameleon / MUTAG into `/data` | `sbatch` (step 2) |
 | `slurm/train_benchmark_array.sbatch` | the 10-seed array job for one config | via `submit_benchmark_sweep.sh` |
-| `scripts/submit_benchmark_sweep.sh` | rebuilds if stale, then submits one sweep | directly (step 3) |
+| `scripts/submit_benchmark_sweep.sh` | submits one sweep, chained behind a rebuild if needed | directly (step 3) |
 | `scripts/submit_all_benchmarks.sh` | chains all three sweeps, 3 tasks concurrent overall | directly (step 3) |
+| `scripts/ensure_container.sh` | checks `cacose.sif` against `cacose.def`, submits one build if stale | called by the two above |
 | `scripts/aggregate_benchmark_results.py` | reads `results/` into a table vs the paper | directly (step 4) |
 | `scripts/run_single_experiment.py` | one (config, seed); what the array calls per task | rarely, for debugging |
 | `scripts/download_datasets.py` | the download itself, wrapped by the job above | rarely, locally |
@@ -90,8 +91,15 @@ Notes on what the job does:
   fail the build: it writes a `.sif` with a valid header and a truncated payload, which then
   fails every `apptainer exec` with `input/output error`. Apptainer's `nodev` warning about
   `/data` is cosmetic by comparison.
-- **An existing `.sif` is deleted first.** A rebuild replaces the image rather than layering on
-  it; if you need to keep the old one, copy it aside before submitting.
+- **An existing `.sif` is replaced in place** by `--force`, rather than deleted first, so a
+  failed build does not leave you with nothing. If you need the old image, copy it aside before
+  submitting.
+- **The `.def.sha256` sidecar is written last, only after the finished image has been exec'd**,
+  and the old one is deleted before the build starts. It certifies a *verified* image, not one
+  that merely exists -- the truncated image described above carried a matching hash, so every
+  freshness check reported "up to date" and reused it. A build that cannot be exec'd now exits
+  non-zero and writes no sidecar, which cancels the chained sweeps via
+  `--kill-on-invalid-dep` instead of running them against a broken image.
 - **Builds always use `--fakeroot`.** Your account is not in `/etc/subuid`, so apptainer falls
   back to a root-mapped namespace -- the `User not listed in /etc/subuid` line in the log is
   expected, not an error.
@@ -148,7 +156,7 @@ scripts/submit_all_benchmarks.sh
 ```
 
 Each sweep is 10 seeds capped at 3 concurrent. Submitting all three at once would allow 9, since
-each array caps independently, so `submit_all_benchmarks.sh` chains them with `--dependency=afterany` --
+each array caps independently, so `submit_all_benchmarks.sh` chains them with `afterany` --
 never more than 3 of your tasks run at a time. Cora and MUTAG take about a minute each, Chameleon
 about 13, so Chameleon goes last.
 
@@ -162,9 +170,18 @@ scripts/submit_all_benchmarks.sh configs/mutag.yaml configs/chameleon.yaml
 Runs unattended. The array's `%3` (`JobArrayTaskLimit`) caps it at three seeds at a time, and
 SLURM starts the next as each finishes.
 
-`submit.sh` also hashes `slurm/cacose.def` against the hash recorded beside the `.sif`. If they
-differ, it submits a rebuild and chains the sweep behind it with `--dependency=afterok`, so a
-stale image cannot quietly produce results under the wrong dependency versions.
+Before anything is submitted, `scripts/ensure_container.sh` hashes `slurm/cacose.def` against the
+hash recorded beside the `.sif`. If they differ it submits a rebuild, and every sweep is chained
+behind it with `afterok`, so a stale image cannot quietly produce results under the wrong
+dependency versions.
+
+That check runs **once per invocation**, in `submit_all_benchmarks.sh`, and the job id is passed
+down through `CACOSE_BUILD_JOB`. Running it per sweep submitted three builds: the first has not
+started by the time the second check runs, so it still sees a missing `.sif`. Sweeps after the
+first therefore carry two dependency terms, joined with a comma (SLURM ANDs them):
+`--dependency=afterany:<prev>,afterok:<build>`. Pass extra terms with `--after`, never with
+`--dependency` -- `sbatch` keeps only the last `--dependency` it is given, so a forwarded one
+would silently drop the build dependency. `submit_benchmark_sweep.sh` rejects it outright.
 
 Watch it:
 

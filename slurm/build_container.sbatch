@@ -23,6 +23,7 @@ DATA_DIR="/data/$USER/CaCoSE"
 SIF="$DATA_DIR/containers/cacose.sif"
 DEF="$REPO/slurm/cacose.def"
 DEF_HASH=$(sha256sum "$DEF" | cut -d' ' -f1)
+HASH_FILE="$SIF.def.sha256"
 
 # The base image keeps its interpreter here. Addressed absolutely rather than as `python`:
 # apptainer exec does not inherit the Docker image's ENV PATH, so a bare `python` is not
@@ -53,20 +54,29 @@ export APPTAINER_TMPDIR="$DATA_DIR/.cache/apptainer_tmp"
 export APPTAINER_CACHEDIR="$DATA_DIR/.cache/apptainer"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 
+# The hash sidecar is a receipt for a VERIFIED image, so it is retired before the build and only
+# rewritten at the very end, once the finished .sif has actually been exec'd. Written here
+# instead, it would certify whatever the build left behind: the truncated image from the tmpfs
+# failure carried a matching hash, so every later freshness check reported "up to date" and
+# happily reused it. A missing sidecar just means the next submission rebuilds -- cheap, and the
+# only safe default.
+rm -f "$HASH_FILE"
+
 # --force replaces an existing image in one step. Deleting it first leaves nothing behind if the
 # build then fails.
 echo "[$(date)] Running: apptainer build --force --fakeroot $SIF $DEF"
 apptainer build --force --fakeroot "$SIF" "$DEF"
-echo "$DEF_HASH" > "$SIF.def.sha256"
-echo "[$(date)] Container ready: $SIF"
+echo "[$(date)] Build finished: $SIF"
 
 echo
 echo "[$(date)] Verifying the stack ..."
 
-# Retry, and never fail the job on this check. An "input/output error" here means the image is
-# unusable -- see the APPTAINER_TMPDIR comment above for the cause that produced one -- but the
-# right response is a loud warning, not aborting: a failed build job leaves every benchmark
-# chained behind it stuck in DependencyNeverSatisfied.
+# This is the only check that can catch a truncated image: the %test section runs against the
+# build tree, not the finished .sif, so it passes on an image that cannot be exec'd at all.
+#
+# Retried because the image sits on network storage and exec'ing it right after writing can
+# return "input/output error" while the file settles -- a transient failure that once failed
+# this job over a container that was fine.
 sync || true
 
 verify() {
@@ -99,23 +109,29 @@ for attempt in 1 2 3 4 5; do
 done
 
 if [ "$VERIFIED" != true ]; then
-    # Warn rather than exit: a failed build job leaves every benchmark chained behind it stuck
-    # in DependencyNeverSatisfied. But do not pretend the image is fine -- a build whose %test
-    # passed can still produce an unusable .sif, which is exactly what a truncated squashfs
-    # looks like.
-    echo "WARNING: the image cannot be executed. It is probably NOT usable." >&2
-    echo "         A %test that passed does not clear it: %test runs against the build tree," >&2
-    echo "         not the finished .sif." >&2
-    echo "         'input/output error' here means a truncated squashfs -- most likely the" >&2
-    echo "         build ran out of memory with APPTAINER_TMPDIR on tmpfs, or --mem was too" >&2
-    echo "         low. Confirm with:" >&2
-    echo "           apptainer inspect $SIF        # header only; succeeds even when truncated" >&2
-    echo "           apptainer exec $SIF /bin/echo hi" >&2
-    echo "         Then rebuild with more memory." >&2
+    # Fail the job. Every sweep is chained with --dependency=afterok ... --kill-on-invalid-dep=yes,
+    # so a non-zero exit cancels them outright rather than parking them in
+    # DependencyNeverSatisfied. That is strictly better than the alternative this script used to
+    # take -- exiting 0 with a warning -- which let 30 tasks start against a broken image and
+    # burn a full round of benchmarks before anyone read a log.
+    #
+    # No sidecar is written, so the next submission rebuilds from scratch.
+    echo "ERROR: the image cannot be executed. It is NOT usable." >&2
+    echo "       A passing %test does not clear it: %test runs against the build tree," >&2
+    echo "       not the finished .sif." >&2
+    echo "       'input/output error' here means a truncated squashfs -- most likely the" >&2
+    echo "       build ran out of memory with APPTAINER_TMPDIR on tmpfs, or --mem was too" >&2
+    echo "       low. Confirm with:" >&2
+    echo "         apptainer inspect $SIF        # header only; succeeds even when truncated" >&2
+    echo "         apptainer exec $SIF /bin/echo hi" >&2
+    exit 1
 fi
+
+echo "$DEF_HASH" > "$HASH_FILE"
 
 echo "=========================================="
 echo " Container ready : $SIF"
+echo " Verified        : yes"
 echo " Interpreter     : $PYTHON"
 echo " Finished        : $(date)"
 echo "=========================================="

@@ -211,10 +211,11 @@ def test_submit_detects_a_stale_container_and_chains_the_rebuild():
     chains the sweep behind a rebuild with --dependency=afterok when they differ.
     """
     submit = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
+    ensure = (REPO / "scripts" / "ensure_container.sh").read_text(encoding="utf-8")
     build = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
 
-    assert "sha256sum" in submit and "def.sha256" in submit
-    assert "--dependency=afterok" in submit
+    assert "sha256sum" in ensure and "def.sha256" in ensure
+    assert "afterok:" in submit
     assert "--hold" not in submit, "sweeps run unattended; %3 is the only throttle"
     # the build must write the sidecar, or submit_benchmark_sweep.sh would rebuild on every invocation
     assert "def.sha256" in build and "sha256sum" in build
@@ -356,36 +357,85 @@ def test_submit_all_validates_the_job_id_before_chaining():
     assert "^[0-9]+$" in text, "the chained job id must be validated as numeric"
 
 
-def test_build_verification_retries_and_never_fails_the_job():
-    """A transient exec failure on /data must not cancel every benchmark behind the build.
+def test_build_verification_retries_then_fails_the_job():
+    """The verify step is the only thing that can catch a truncated .sif -- %test runs against
+    the build tree, not the finished image -- so failing it must fail the build job.
 
-    The image is on network storage, and exec'ing it immediately after writing can return
-    "input/output error" while the file settles. That once failed the build job, leaving three
-    chained arrays in DependencyNeverSatisfied even though the container was fine.
+    It retries first: the image is on network storage and exec'ing it immediately after writing
+    can return "input/output error" while the file settles. But once the retries are exhausted
+    the job must exit non-zero, so --kill-on-invalid-dep cancels the chained sweeps instead of
+    letting 30 tasks run against an unusable image.
     """
     text = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
     assert "for attempt in" in text, "verification must retry"
-    assert "VERIFIED" in text and "WARNING" in text, "a failed verify must warn, not exit"
     verify_block = text[text.index("Verifying the stack") :]
-    assert "exit 1" not in verify_block, "verification must not fail the build job"
+    assert "exit 1" in verify_block, "a build that cannot be exec'd must fail the job"
+
+
+def test_hash_sidecar_is_written_only_after_verification():
+    """The sidecar certifies a *verified* image, not merely a written one.
+
+    Written before the verify step, it would certify whatever the build left behind. That is how
+    the truncated image survived: its hash matched, so every freshness check said "up to date"
+    and reused it.
+    """
+    text = (REPO / "slurm" / "build_container.sbatch").read_text(encoding="utf-8")
+    code = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+    write_at = next(i for i, ln in enumerate(code) if re.search(r'echo "\$DEF_HASH" >', ln))
+    verify_at = next(i for i, ln in enumerate(code) if "VERIFIED" in ln)
+    assert write_at > verify_at, "the sidecar must be written after verification, not before"
+    assert any('rm -f "$HASH_FILE"' in ln for ln in code), (
+        "a stale sidecar must be retired before the build, so a failed build certifies nothing"
+    )
+
+
+def test_all_benchmarks_submits_exactly_one_build_job():
+    """Three sweeps must share one build, not queue one each.
+
+    submit_all_benchmarks.sh calls submit_benchmark_sweep.sh once per dataset. When each sweep
+    ran its own freshness check, the first build had not started by the time the second check
+    ran, so it still saw a missing .sif and submitted another -- three concurrent
+    `apptainer build --force` calls writing the same path. The check therefore happens once, in
+    submit_all_benchmarks.sh, and the id is handed down through CACOSE_BUILD_JOB.
+    """
+    all_sh = (REPO / "scripts" / "submit_all_benchmarks.sh").read_text(encoding="utf-8")
+    sweep = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
+
+    code = [ln for ln in all_sh.splitlines() if not ln.strip().startswith("#")]
+    ensure_calls = [ln for ln in code if "ensure_container.sh" in ln]
+    assert len(ensure_calls) == 1, f"the container check must happen once, found: {ensure_calls}"
+    assert any("export CACOSE_BUILD_JOB" in ln for ln in code)
+
+    # +set, not -n: an empty value is meaningful -- it means "checked, no build needed" -- and
+    # a plain emptiness test would send the sweep off to check again.
+    assert "${CACOSE_BUILD_JOB+set}" in sweep, (
+        "the sweep must distinguish an unset variable from an empty one"
+    )
+
+
+def test_sweep_merges_dependencies_instead_of_letting_them_overwrite():
+    """sbatch keeps only the last --dependency it is given.
+
+    submit_all_benchmarks.sh used to forward --dependency=afterany:<prev> as an extra sbatch
+    argument while the sweep script emitted its own --dependency=afterok:<build>. The forwarded
+    one won, so every dataset after the first lost its build dependency and would have started
+    against a half-written image. Extra terms now arrive as --after and are joined with commas,
+    which SLURM ANDs.
+    """
+    text = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
+    assert "--after" in text, "extra dependency terms need their own flag"
+    assert "IFS=,;" in text, "dependency terms must be ANDed into one --dependency"
+
+    code = _command_lines("scripts/submit_benchmark_sweep.sh")
+    assert "pass dependencies with --after" in code, (
+        "a forwarded --dependency must be rejected, not silently honoured"
+    )
 
 
 def test_sweep_is_cancelled_if_its_build_fails():
     """Without --kill-on-invalid-dep a failed build leaves the sweep parked forever."""
     text = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
     assert "--kill-on-invalid-dep=yes" in text
-
-
-@pytest.mark.parametrize(
-    "script",
-    [
-        "slurm/build_container.sbatch",
-        "slurm/download_datasets.sbatch",
-        "slurm/train_benchmark_array.sbatch",
-        "scripts/submit_benchmark_sweep.sh",
-        "scripts/submit_all_benchmarks.sh",
-    ],
-)
 
 
 def _command_lines(script: str) -> str:
@@ -401,6 +451,7 @@ CLUSTER_SCRIPTS = [
     "slurm/train_benchmark_array.sbatch",
     "scripts/submit_benchmark_sweep.sh",
     "scripts/submit_all_benchmarks.sh",
+    "scripts/ensure_container.sh",
 ]
 
 

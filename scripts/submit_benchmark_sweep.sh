@@ -2,29 +2,49 @@
 # Submit one benchmark: 10 seeds of one config, rebuilding the container first if it is stale.
 #
 #   scripts/submit_benchmark_sweep.sh configs/cora.yaml
+#   scripts/submit_benchmark_sweep.sh configs/mutag.yaml --after afterany:12345
 #
 # Three things happen here:
 #
 #   1. The log directory is created before sbatch opens a log file. sbatch fails outright if
 #      --output points somewhere that does not exist.
-#   2. The container definition is hashed and compared against the hash recorded beside the
-#      .sif. If they differ, a build job is submitted and the sweep is chained behind it with
-#      --dependency=afterok, so tasks can only start after a successful build. This is what
-#      stops a stale image from silently producing results under the wrong dependency versions.
+#   2. scripts/ensure_container.sh compares cacose.def against the hash recorded beside the .sif
+#      and submits a build job if they differ, so the sweep is chained behind it with
+#      --dependency=afterok. This is what stops a stale image from silently producing results
+#      under the wrong dependency versions.
 #   3. The sweep is submitted and runs unattended. The array's %3 (JobArrayTaskLimit) caps it
 #      at three seeds at a time; SLURM starts the next as each finishes.
+#
+# The caller may skip step 2 by exporting CACOSE_BUILD_JOB (a job id, or empty to mean "already
+# checked, no build needed"). submit_all_benchmarks.sh does that so three chained sweeps share
+# one build instead of queueing one each.
 
 set -euo pipefail
 
-CONFIG=${1:?usage: scripts/submit_benchmark_sweep.sh <config.yaml> [--parsable] [extra sbatch args...]}
+CONFIG=${1:?usage: scripts/submit_benchmark_sweep.sh <config.yaml> [--parsable] [--after <dep>] [sbatch args...]}
 shift || true
 
-# --parsable prints only the array job id, so submit_all_benchmarks.sh can chain on it. Consumed here
-# rather than forwarded, since sbatch is already given --parsable internally.
+# --parsable prints only the array job id, so submit_all_benchmarks.sh can chain on it. Consumed
+# here rather than forwarded, since sbatch is already given --parsable internally.
+#
+# --after collects extra dependency terms. They are merged into the single --dependency flag
+# built below rather than passed through: sbatch keeps only the last --dependency it is given,
+# so a forwarded one would silently drop the build dependency and let the sweep start against a
+# half-written image.
 PARSABLE=false
+EXTRA_DEPS=()
 ARGS=()
-for arg in "$@"; do
-    if [[ "$arg" == "--parsable" ]]; then PARSABLE=true; else ARGS+=("$arg"); fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --parsable) PARSABLE=true; shift ;;
+        --after) EXTRA_DEPS+=("${2:?--after needs a dependency spec, e.g. afterany:12345}"); shift 2 ;;
+        --after=*) EXTRA_DEPS+=("${1#*=}"); shift ;;
+        --dependency|--dependency=*)
+            echo "ERROR: pass dependencies with --after <spec>, not --dependency" >&2
+            echo "       they must be merged with the container build dependency, not replace it" >&2
+            exit 1 ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
@@ -38,38 +58,33 @@ fi
 
 CACOSE_ROOT="/data/$USER/CaCoSE"
 LOG_DIR="$CACOSE_ROOT/logs"
-SIF="$CACOSE_ROOT/containers/cacose.sif"
-DEF="$REPO/slurm/cacose.def"
-HASH_FILE="$SIF.def.sha256"
 
 mkdir -p "$LOG_DIR" "$CACOSE_ROOT/containers"
 
 # ── container freshness ──────────────────────────────────────────────────────
-DEF_HASH=$(sha256sum "$DEF" | cut -d' ' -f1)
-DEPENDENCY=""
-
 # Status goes to stderr, never stdout. Under --parsable the caller reads stdout to get the job
 # id and chain the next sweep onto it; a stray status line there is captured as part of the id
 # and the next --dependency is rejected with "Job dependency problem". Stderr still shows on a
 # terminal, so nothing is hidden from a human.
 say() { echo "$@" >&2; }
 
-if [[ -f "$SIF" && -f "$HASH_FILE" && "$DEF_HASH" == "$(cat "$HASH_FILE")" ]]; then
-    say "[container] up to date (${DEF_HASH:0:12})"
+if [[ -n "${CACOSE_BUILD_JOB+set}" ]]; then
+    BUILD_JOB="$CACOSE_BUILD_JOB"      # the caller already ran ensure_container.sh
 else
-    if [[ -f "$SIF" ]]; then
-        say "[container] STALE -- cacose.def changed since ${SIF##*/} was built"
-    else
-        say "[container] missing -- building it first"
-    fi
-    BUILD_JOB=$(sbatch --parsable \
-        --output="$LOG_DIR/cacose-build_%j.out" \
-        --error="$LOG_DIR/cacose-build_%j.err" \
-        slurm/build_container.sbatch)
-    say "[container] build job $BUILD_JOB submitted; the sweep will wait for it"
+    BUILD_JOB=$(scripts/ensure_container.sh)
+fi
+
+DEPS=("${EXTRA_DEPS[@]+"${EXTRA_DEPS[@]}"}")
+[[ -n "$BUILD_JOB" ]] && DEPS+=("afterok:${BUILD_JOB}")
+
+DEPENDENCY=""
+if [[ ${#DEPS[@]} -gt 0 ]]; then
+    # Comma-separated terms are ANDed by SLURM: every one must be satisfied.
     # kill-on-invalid-dep: if the build fails, cancel this sweep instead of leaving it parked in
     # DependencyNeverSatisfied, where it clogs the queue and blocks anything chained behind it.
-    DEPENDENCY="--dependency=afterok:${BUILD_JOB} --kill-on-invalid-dep=yes"
+    joined=$(IFS=,; echo "${DEPS[*]}")
+    DEPENDENCY="--dependency=${joined} --kill-on-invalid-dep=yes"
+    say "[sweep] $(basename "$CONFIG") waits on ${joined}"
 fi
 
 # ── the sweep itself ─────────────────────────────────────────────────────────
@@ -94,7 +109,7 @@ logs      : ${LOG_DIR}/cacose_${JOBID}_*.out
 results   : ${CACOSE_ROOT}/results/
 EOF
 
-if [[ -n "$DEPENDENCY" ]]; then
+if [[ -n "$BUILD_JOB" ]]; then
     cat <<EOF
 waiting on: build job ${BUILD_JOB} (afterok)
 

@@ -7,10 +7,16 @@
 #
 # Each sweep is 10 seeds capped at 3 concurrent by the array's %3. Submitting all three at once
 # would allow 9 concurrent, since each array caps independently -- so each dataset is chained
-# behind the previous with --dependency=afterany. Never more than 3 of your tasks run at a time.
+# behind the previous with afterany. Never more than 3 of your tasks run at a time.
 #
 # afterany, not afterok: a dataset that fails should not silently block the ones after it. Check
 # the logs rather than assuming a quiet queue means success.
+#
+# The container is checked ONCE here, and every sweep is chained behind that single build with
+# afterok. Letting each sweep run its own check submitted three build jobs: the first build has
+# not run by the time the second check happens, so it still sees a missing .sif. Each sweep
+# after the first therefore carries two dependency terms -- the shared build, and the previous
+# dataset -- which is why they go through --after and are merged into one --dependency flag.
 #
 # Cora and MUTAG take about a minute each; Chameleon about 13, so it goes last.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -25,17 +31,26 @@ if [ ${#CONFIGS[@]} -eq 0 ]; then
     CONFIGS=(configs/cora.yaml configs/mutag.yaml configs/chameleon.yaml)
 fi
 
-CACOSE_ROOT="/data/$USER/CaCoSE"
-PREV=""
-IDS=()
-
 for cfg in "${CONFIGS[@]}"; do
     if [ ! -f "$cfg" ]; then
         echo "ERROR: no such config: $cfg" >&2
         exit 1
     fi
+done
+
+CACOSE_ROOT="/data/$USER/CaCoSE"
+
+# One build for the whole run. Exported even when empty: that is how submit_benchmark_sweep.sh
+# knows the check has already been made and must not repeat it.
+CACOSE_BUILD_JOB=$(scripts/ensure_container.sh)
+export CACOSE_BUILD_JOB
+
+PREV=""
+IDS=()
+
+for cfg in "${CONFIGS[@]}"; do
     if [ -n "$PREV" ]; then
-        JOB=$(scripts/submit_benchmark_sweep.sh "$cfg" --parsable --dependency="afterany:${PREV}")
+        JOB=$(scripts/submit_benchmark_sweep.sh "$cfg" --parsable --after "afterany:${PREV}")
         WHEN="after $PREV"
     else
         JOB=$(scripts/submit_benchmark_sweep.sh "$cfg" --parsable)
@@ -54,6 +69,10 @@ for cfg in "${CONFIGS[@]}"; do
     PREV="$JOB"
 done
 
+if [ -n "$CACOSE_BUILD_JOB" ]; then
+    echo "build  : job $CACOSE_BUILD_JOB   (all ${#CONFIGS[@]} sweeps wait on it)"
+fi
+
 cat <<EOF
 
 All ${#CONFIGS[@]} sweeps queued, running one dataset at a time (3 seeds concurrent within each).
@@ -66,5 +85,5 @@ When everything finishes:
     CACOSE_OUT=${CACOSE_ROOT} python3 -m scripts.aggregate_benchmark_results
     tar czf cacose_results.tgz -C ${CACOSE_ROOT} results
 
-Cancel everything: scancel ${IDS[*]}
+Cancel everything: scancel ${IDS[*]}${CACOSE_BUILD_JOB:+ $CACOSE_BUILD_JOB}
 EOF

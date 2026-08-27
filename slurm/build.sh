@@ -58,5 +58,15 @@ echo
 echo "built: $SIF"
 ls -lh "$SIF"
 echo
-"$APP" exec "$SIF" python -c "import torch, torch_geometric, numpy; print('torch', torch.__version__, '| pyg', torch_geometric.__version__, '| numpy', numpy.__version__)"
-echo "OK"
+# Try `python` first; fall back to the interpreter's real location if PATH still hides it.
+for PY in python /opt/conda/bin/python python3; do
+    if "$APP" exec "$SIF" "$PY" -c pass 2>/dev/null; then
+        echo "interpreter: $PY"
+        "$APP" exec "$SIF" "$PY" -c "import torch, torch_geometric, numpy; print('torch', torch.__version__, '| pyg', torch_geometric.__version__, '| numpy', numpy.__version__)"
+        echo "OK"
+        exit 0
+    fi
+done
+echo "ERROR: no working python inside $SIF" >&2
+"$APP" exec "$SIF" sh -c 'echo PATH=$PATH; ls -l /usr/local/bin/python* 2>&1; ls /opt/conda/bin/python* 2>&1' >&2
+exit 1

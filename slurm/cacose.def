@@ -29,7 +29,13 @@ From: pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
     # without this, every job dies with: "python": executable file not found in $PATH.
     # /usr/local/bin is on Apptainer's default PATH, so a symlink there is more robust than
     # exporting PATH alone (both are done).
-    command -v python >/dev/null 2>&1 || ln -sf "$(command -v python3)" /usr/local/bin/python
+    # Unconditional on purpose. A `command -v python || ln -s` guard does NOT work here: during
+    # %post python resolves fine through Docker's PATH, so the guard skips, and then exec-time
+    # lookup fails anyway. The symlink has to exist regardless of what %post can see.
+    PY=$(command -v python3 || command -v python)
+    ln -sf "$PY" /usr/local/bin/python
+    ln -sf "$PY" /usr/local/bin/python3
+    echo "linked /usr/local/bin/python -> $PY"
 
     pip install --no-cache-dir \
         "numpy<2" \

@@ -374,3 +374,62 @@ def test_sweep_is_cancelled_if_its_build_fails():
     """Without --kill-on-invalid-dep a failed build leaves the sweep parked forever."""
     text = (REPO / "scripts" / "submit_benchmark_sweep.sh").read_text(encoding="utf-8")
     assert "--kill-on-invalid-dep=yes" in text
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "slurm/build_container.sbatch",
+        "slurm/download_datasets.sbatch",
+        "slurm/train_benchmark_array.sbatch",
+        "scripts/submit_benchmark_sweep.sh",
+        "scripts/submit_all_benchmarks.sh",
+    ],
+)
+
+
+def _command_lines(script: str) -> str:
+    """Script text with comments stripped -- prose mentions paths that code never touches."""
+    text = (REPO / script).read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+    return "\n".join(lines)
+
+
+CLUSTER_SCRIPTS = [
+    "slurm/build_container.sbatch",
+    "slurm/download_datasets.sbatch",
+    "slurm/train_benchmark_array.sbatch",
+    "scripts/submit_benchmark_sweep.sh",
+    "scripts/submit_all_benchmarks.sh",
+]
+
+
+@pytest.mark.parametrize("script", CLUSTER_SCRIPTS)
+def test_nothing_writes_outside_the_users_own_data_directory(script):
+    """`/data/shared` is the lab's shared area, read-only for student accounts. Nothing here may
+    reference it, and every /data path must sit under the per-user tree."""
+    code = _command_lines(script)
+    assert "/data/shared" not in code
+
+    # (?<![\w.]) so ./data/... in a relative path is not mistaken for an absolute /data/...
+    for match in re.finditer(r"(?<![\w.])/data/[^\s\"';:)}]*", code):
+        path = match.group(0)
+        assert path.startswith(("/data/$USER/", "/data/%u/", "/data/${USER}/")), (
+            f"{script} references {path}, which is outside /data/$USER"
+        )
+
+
+@pytest.mark.parametrize("script", CLUSTER_SCRIPTS[:3])
+def test_container_sees_only_the_three_intended_binds(script):
+    """--containall means the container sees nothing that is not bound explicitly, so the bind
+    list is the real boundary: the repo, the user's own /data tree, and node-local /tmp.
+    /data/shared is not among them and is therefore not even visible inside the container."""
+    code = _command_lines(script)
+    if "apptainer exec" not in code:
+        pytest.skip("no container exec in this script")
+    assert "--containall" in code, "without --containall the host filesystem leaks in"
+
+    sources = {b.split(":")[0] for b in re.findall(r'--bind\s+"?([^\s"]+)', code)}
+    assert sources, "expected at least one --bind"
+    allowed = {"/tmp", "$REPO", "${REPO}", "$DATA_DIR", "${DATA_DIR}"}
+    assert sources <= allowed, f"{script} binds {sources - allowed}, outside the intended three"
